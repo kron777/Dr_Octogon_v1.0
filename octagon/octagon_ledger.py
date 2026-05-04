@@ -5,7 +5,7 @@ WAL mode + gatekeeper enforced: importing this module installs the gatekeeper gl
 (the gatekeeper module calls install() at import time). The ledger then calls
 set_checkpoint_db() so the watchdog knows which file to checkpoint.
 
-Reasoning traces live on disk under TRACE_DIR; the DB row holds the path only.
+Reasoning traces live on disk (written by octagon_research); the DB row holds the path only.
 """
 
 import json
@@ -19,7 +19,7 @@ import structlog
 
 import octagon.octagon_db_gatekeeper as _gk  # installs gatekeeper on import
 from octagon.octagon_config import CONFIG
-from octagon.octagon_models import MarketSnapshot, Prediction, Resolution, SourceDoc
+from octagon.octagon_models import Adjustment, MarketSnapshot, Prediction, Resolution, SourceDoc
 
 log = structlog.get_logger(__name__)
 
@@ -57,13 +57,22 @@ CREATE TABLE IF NOT EXISTS predictions (
     resolution_clarity         REAL NOT NULL,
     unciteable                 INTEGER NOT NULL DEFAULT 0,
     base_rate                  REAL,
-    base_rate_ref_class        TEXT,
-    base_rate_source           TEXT,
-    adjustments                TEXT,   -- JSON
-    edge_cases_considered      TEXT,   -- JSON
+    base_rate_reference_class  TEXT,
+    edge_cases                 TEXT,   -- JSON list of strings
     predicted_at               TEXT NOT NULL,
     ttl_seconds                INTEGER NOT NULL,
-    trace_path                 TEXT
+    reasoning_trace_path       TEXT,
+    model_used                 TEXT DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS adjustments (
+    adjustment_id  TEXT PRIMARY KEY,
+    prediction_id  TEXT NOT NULL REFERENCES predictions(prediction_id),
+    direction      TEXT NOT NULL,
+    magnitude_pp   REAL NOT NULL,
+    source_url     TEXT NOT NULL,
+    rationale      TEXT,
+    ord            INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS evidence_refs (
@@ -97,6 +106,18 @@ CREATE TABLE IF NOT EXISTS calibration_source (
     n_without             INTEGER DEFAULT 0,
     last_recalibrated_at  TEXT
 );
+
+CREATE TABLE IF NOT EXISTS trades (
+    trade_id       TEXT PRIMARY KEY,
+    prediction_id  TEXT NOT NULL REFERENCES predictions(prediction_id),
+    market_id      TEXT NOT NULL REFERENCES markets(market_id),
+    side           TEXT NOT NULL,     -- 'YES' or 'NO'
+    entry_price    REAL NOT NULL,
+    size_usd       REAL NOT NULL,
+    entered_at     TEXT NOT NULL,
+    paper          INTEGER NOT NULL DEFAULT 1,  -- 1=paper, 0=live
+    status         TEXT NOT NULL DEFAULT 'open' -- 'open', 'closed', 'cancelled'
+);
 """
 
 
@@ -116,6 +137,15 @@ class OctagonLedger:
     def _install_schema(self) -> None:
         con = self._connect()
         con.executescript(_SCHEMA)
+        for stmt in [
+            "ALTER TABLE predictions ADD COLUMN model_used TEXT DEFAULT ''",
+            "ALTER TABLE trades ADD COLUMN pnl_usd REAL DEFAULT NULL",
+            "ALTER TABLE trades ADD COLUMN closed_at TEXT DEFAULT NULL",
+        ]:
+            try:
+                con.execute(stmt)
+            except sqlite3.OperationalError:
+                pass  # column already exists
         con.commit()
         con.close()
 
@@ -168,34 +198,15 @@ class OctagonLedger:
     def log_prediction(
         self, prediction: Prediction, source_docs: list[SourceDoc] | None = None
     ) -> None:
-        trace_path = self.trace_dir / f"{prediction.prediction_id}.json"
-        trace_path.write_text(
-            json.dumps(
-                {
-                    "prediction_id": prediction.prediction_id,
-                    "market_id": prediction.market_id,
-                    "reasoning": prediction.reasoning,
-                    "base_rate": prediction.base_rate,
-                    "base_rate_ref_class": prediction.base_rate_ref_class,
-                    "base_rate_source": prediction.base_rate_source,
-                    "adjustments": prediction.adjustments,
-                    "edge_cases_considered": prediction.edge_cases_considered,
-                    "predicted_at": prediction.predicted_at.isoformat(),
-                },
-                indent=2,
-            )
-        )
-
         con = self._connect()
         con.execute(
             """
             INSERT OR REPLACE INTO predictions
                 (prediction_id, market_id, p_yes, p_yes_raw, confidence, edge,
                  market_price_at_prediction, resolution_clarity, unciteable,
-                 base_rate, base_rate_ref_class, base_rate_source,
-                 adjustments, edge_cases_considered,
-                 predicted_at, ttl_seconds, trace_path)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 base_rate, base_rate_reference_class, edge_cases,
+                 predicted_at, ttl_seconds, reasoning_trace_path, model_used)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 prediction.prediction_id,
@@ -208,16 +219,34 @@ class OctagonLedger:
                 prediction.resolution_clarity,
                 int(prediction.unciteable),
                 prediction.base_rate,
-                prediction.base_rate_ref_class,
-                prediction.base_rate_source,
-                json.dumps(prediction.adjustments),
-                json.dumps(prediction.edge_cases_considered),
+                prediction.base_rate_reference_class,
+                json.dumps(prediction.edge_cases),
                 prediction.predicted_at.isoformat(),
                 prediction.ttl_seconds,
-                str(trace_path),
+                prediction.reasoning_trace_path,
+                prediction.model_used,
             ),
         )
 
+        for i, adj in enumerate(prediction.adjustments):
+            con.execute(
+                """
+                INSERT INTO adjustments
+                    (adjustment_id, prediction_id, direction, magnitude_pp, source_url, rationale, ord)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    prediction.prediction_id,
+                    adj.direction,
+                    adj.magnitude_pp,
+                    adj.source_url,
+                    adj.rationale,
+                    i,
+                ),
+            )
+
+        # Populate evidence_refs: prefer full SourceDoc objects; fall back to URL strings
         if source_docs:
             for doc in source_docs:
                 con.execute(
@@ -232,6 +261,12 @@ class OctagonLedger:
                         doc.source_class,
                         doc.fetched_at.isoformat(),
                     ),
+                )
+        else:
+            for url in prediction.evidence_refs:
+                con.execute(
+                    "INSERT INTO evidence_refs (prediction_id, source_url) VALUES (?, ?)",
+                    (prediction.prediction_id, url),
                 )
 
         con.commit()
@@ -280,9 +315,8 @@ class OctagonLedger:
             """
             SELECT prediction_id, market_id, p_yes, p_yes_raw, confidence, edge,
                    market_price_at_prediction, resolution_clarity, unciteable,
-                   base_rate, base_rate_ref_class, base_rate_source,
-                   adjustments, edge_cases_considered,
-                   predicted_at, ttl_seconds
+                   base_rate, base_rate_reference_class, edge_cases,
+                   predicted_at, ttl_seconds, reasoning_trace_path, model_used
             FROM predictions
             WHERE predicted_at >= ?
             ORDER BY predicted_at DESC
@@ -296,8 +330,8 @@ class OctagonLedger:
         for row in rows:
             (
                 pid, mid, p_yes, p_yes_raw, conf, edge, price_at, clarity, unciteable,
-                base_rate, ref_class, base_src, adj_json, ec_json,
-                predicted_at, ttl,
+                base_rate, ref_class, ec_json,
+                predicted_at, ttl, trace_path, model_used,
             ) = row
             if mid not in result:
                 result[mid] = Prediction(
@@ -307,20 +341,153 @@ class OctagonLedger:
                     p_yes_raw=p_yes_raw,
                     confidence=conf,
                     edge=edge,
-                    reasoning="",
-                    evidence_refs=[],
                     market_price_at_prediction=price_at,
                     resolution_clarity=clarity,
                     unciteable=bool(unciteable),
+                    base_rate=base_rate or 0.5,
+                    base_rate_reference_class=ref_class or "",
+                    adjustments=[],
+                    edge_cases=json.loads(ec_json or "[]"),
+                    reasoning_trace_path=trace_path or "",
+                    evidence_refs=[],
                     predicted_at=datetime.fromisoformat(predicted_at),
                     ttl_seconds=ttl,
-                    base_rate=base_rate or 0.5,
-                    base_rate_ref_class=ref_class or "",
-                    base_rate_source=base_src or "",
-                    adjustments=json.loads(adj_json or "[]"),
-                    edge_cases_considered=json.loads(ec_json or "[]"),
+                    model_used=model_used or "",
                 )
         return result
+
+    def log_trade(self, trade: "Trade", paper: bool = True) -> None:
+        con = self._connect()
+        con.execute(
+            """
+            INSERT INTO trades
+                (trade_id, prediction_id, market_id, side,
+                 entry_price, size_usd, entered_at, paper, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open')
+            """,
+            (
+                trade.trade_id,
+                trade.prediction_id,
+                trade.market_id,
+                trade.side,
+                trade.entry_price,
+                trade.size_usd,
+                trade.entered_at.isoformat(),
+                int(paper),
+            ),
+        )
+        con.commit()
+        con.close()
+        log.info(
+            "ledger.trade_logged",
+            trade_id=trade.trade_id,
+            market_id=trade.market_id,
+            side=trade.side,
+            size_usd=round(trade.size_usd, 4),
+            entry_price=round(trade.entry_price, 4),
+            paper=paper,
+        )
+
+    def today_paper_loss_usd(self) -> float:
+        """Sum of paper trade stakes entered today (worst-case daily exposure)."""
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        con = self._connect()
+        cur = con.cursor()
+        cur.execute(
+            """
+            SELECT COALESCE(SUM(size_usd), 0.0)
+            FROM trades
+            WHERE paper = 1
+              AND entered_at >= ?
+            """,
+            (today,),
+        )
+        result = cur.fetchone()[0]
+        con.close()
+        return float(result)
+
+    def total_trades(self) -> int:
+        """Total number of trades ever logged (paper + live)."""
+        con = self._connect()
+        cur = con.cursor()
+        cur.execute("SELECT COUNT(*) FROM trades")
+        result = cur.fetchone()[0]
+        con.close()
+        return int(result)
+
+    def get_open_trades_for_market(self, market_id: str) -> list:
+        """Return all open paper trades for a market."""
+        from octagon.octagon_models import Trade
+        con = self._connect()
+        cur = con.cursor()
+        cur.execute(
+            "SELECT trade_id, prediction_id, market_id, side, entry_price, size_usd, entered_at "
+            "FROM trades WHERE market_id = ? AND status = 'open' AND paper = 1",
+            (market_id,),
+        )
+        rows = cur.fetchall()
+        con.close()
+        result = []
+        for r in rows:
+            result.append(Trade(
+                trade_id=r[0],
+                prediction_id=r[1],
+                market_id=r[2],
+                side=r[3],
+                entry_price=r[4],
+                size_usd=r[5],
+                entered_at=datetime.fromisoformat(r[6]),
+            ))
+        return result
+
+    def close_trade(self, trade_id: str, pnl: float, closed_at: datetime) -> None:
+        con = self._connect()
+        con.execute(
+            "UPDATE trades SET status='closed', pnl_usd=?, closed_at=? WHERE trade_id=?",
+            (pnl, closed_at.isoformat(), trade_id),
+        )
+        con.commit()
+        con.close()
+        log.info("ledger.trade_closed", trade_id=trade_id, pnl_usd=round(pnl, 4))
+
+    def current_bankroll(self) -> float:
+        """
+        Bankroll = STARTING_BANKROLL_USD - open paper exposure + realized paper P&L.
+        Open exposure prevents over-allocation before settlement.
+        Realized P&L adjusts permanently after each market resolves.
+        """
+        try:
+            con = self._connect()
+            cur = con.cursor()
+            cur.execute(
+                "SELECT COALESCE(SUM(size_usd), 0.0) FROM trades WHERE paper=1 AND status='open'"
+            )
+            open_exposure = float(cur.fetchone()[0])
+            cur.execute(
+                "SELECT COALESCE(SUM(pnl_usd), 0.0) FROM trades WHERE paper=1 AND status='closed'"
+            )
+            realized_pnl = float(cur.fetchone()[0])
+            con.close()
+            return max(0.01, CONFIG.starting_bankroll_usd - open_exposure + realized_pnl)
+        except Exception:
+            return CONFIG.starting_bankroll_usd
+
+    def realized_pnl_today(self) -> float:
+        """Sum of pnl_usd from paper trades closed today (UTC)."""
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        try:
+            con = self._connect()
+            cur = con.cursor()
+            cur.execute(
+                "SELECT COALESCE(SUM(pnl_usd), 0.0) FROM trades "
+                "WHERE paper=1 AND status='closed' AND closed_at >= ?",
+                (today,),
+            )
+            result = float(cur.fetchone()[0])
+            con.close()
+            return result
+        except Exception:
+            return 0.0
 
     def unresolved_markets_past_resolution_time(self) -> list[str]:
         """Market IDs that have passed resolves_at but have no resolution record."""

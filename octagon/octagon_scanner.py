@@ -1,16 +1,15 @@
 """
 Polymarket market discovery.
 
-Two APIs:
-  Gamma API   — market metadata, prices, categories (public, no auth)
-  CLOB API    — order book bid/ask/depth (public, no auth, no signing)
+Primary source: Gamma /events endpoint — each event has embedded market objects
+AND top-level tags with real category labels (Politics, Crypto, Finance, etc.).
+Markets are extracted from events and enriched with CLOB bid/ask/depth.
 
-scan() returns all active markets that survive basic sanity checks.
-Book data is fetched per-market; failures fall back to Gamma's mid price
-with estimated spread rather than dropping the market.
+CLOB API    — order book bid/ask/depth (public, no auth, no signing)
 """
 
 import asyncio
+import json as _json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -28,15 +27,43 @@ PAGE_SIZE = 100
 MAX_BOOK_CONCURRENCY = 10
 REQUEST_TIMEOUT = 15
 
-# Logged once per scan so Jon can tune the category whitelist in Phase 1
 _seen_categories: set[str] = set()
+
+# Polymarket tag labels → our internal category names
+_TAG_CATEGORY_MAP: dict[str, str] = {
+    "politics": "Politics",
+    "geopolitics": "Politics",
+    "government": "Politics",
+    "us politics": "Politics",
+    "elections": "Politics",
+    "crypto": "Crypto",
+    "bitcoin": "Crypto",
+    "ethereum": "Crypto",
+    "defi": "Crypto",
+    "blockchain": "Crypto",
+    "web3": "Crypto",
+    "cryptocurrency": "Crypto",
+    "economics": "Economics",
+    "economy": "Economics",
+    "macro": "Macro",
+    "monetary policy": "Macro",
+    "federal reserve": "Macro",
+    "inflation": "Macro",
+    "gdp": "Macro",
+    "interest rates": "Macro",
+    "central bank": "Macro",
+    "finance": "Finance",
+    "stocks": "Finance",
+    "equities": "Finance",
+    "business": "Finance",
+    "companies": "Finance",
+}
 
 
 async def scan() -> list[MarketSnapshot]:
     markets_raw = await _fetch_all_markets()
     log.info("scanner.gamma_fetched", count=len(markets_raw))
 
-    # Fetch order books concurrently
     sem = asyncio.Semaphore(MAX_BOOK_CONCURRENCY)
     tasks = [_enrich_with_book(sem, m) for m in markets_raw]
     snapshots_or_none = await asyncio.gather(*tasks, return_exceptions=True)
@@ -52,13 +79,18 @@ async def scan() -> list[MarketSnapshot]:
 
 
 async def _fetch_all_markets() -> list[dict]:
+    """
+    Fetch events from Gamma, flatten to per-market dicts augmented with
+    a '_category' field derived from the event's top-level tags.
+    """
     results: list[dict] = []
+    seen_market_ids: set[str] = set()
     offset = 0
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         while len(results) < CONFIG.max_markets_per_scan:
             page = await _get_with_retry(
                 client,
-                f"{GAMMA_BASE}/markets",
+                f"{GAMMA_BASE}/events",
                 params={
                     "active": "true",
                     "closed": "false",
@@ -70,11 +102,32 @@ async def _fetch_all_markets() -> list[dict]:
             )
             if not page:
                 break
-            results.extend(page)
+            for event in page:
+                category = _category_from_tags(event.get("tags") or [])
+                for market in event.get("markets") or []:
+                    mid = str(market.get("id") or "")
+                    if not mid or mid in seen_market_ids:
+                        continue
+                    # Skip markets the CLOB has no book for: either not yet
+                    # bootstrapped (active=False) or already closed/resolved
+                    if not market.get("active") or market.get("closed") or market.get("archived"):
+                        continue
+                    seen_market_ids.add(mid)
+                    market["_category"] = category
+                    results.append(market)
             if len(page) < PAGE_SIZE:
                 break
             offset += PAGE_SIZE
     return results[: CONFIG.max_markets_per_scan]
+
+
+def _category_from_tags(tags: list[dict]) -> str:
+    """Map event tags to an internal category. First match wins."""
+    for tag in tags:
+        label = (tag.get("label") or "").strip().lower()
+        if label in _TAG_CATEGORY_MAP:
+            return _TAG_CATEGORY_MAP[label]
+    return "Other"
 
 
 async def _enrich_with_book(sem: asyncio.Semaphore, raw: dict) -> MarketSnapshot | None:
@@ -91,12 +144,7 @@ async def _build_snapshot(raw: dict) -> MarketSnapshot | None:
     if not question:
         return None
 
-    category = (
-        raw.get("category")
-        or raw.get("groupItemTitle")
-        or _infer_category(raw)
-        or "Other"
-    )
+    category = raw.get("_category") or "Other"
     _seen_categories.add(category)
 
     resolution_criteria = (
@@ -106,20 +154,29 @@ async def _build_snapshot(raw: dict) -> MarketSnapshot | None:
         or ""
     ).strip()
 
-    # Parse resolution time — Gamma uses ISO strings or Unix timestamps
     resolves_at = _parse_date(raw.get("endDate") or raw.get("gameStartTime"))
     if resolves_at is None:
         return None
 
-    # Base price from Gamma outcome prices
+    # outcomePrices arrives as a JSON-encoded string from Gamma
     outcome_prices = raw.get("outcomePrices") or []
+    if isinstance(outcome_prices, str):
+        try:
+            outcome_prices = _json.loads(outcome_prices)
+        except (_json.JSONDecodeError, ValueError):
+            outcome_prices = []
     try:
         yes_price_mid = float(outcome_prices[0]) if outcome_prices else 0.5
     except (IndexError, ValueError, TypeError):
         yes_price_mid = 0.5
 
-    # Order book
+    # clobTokenIds also arrives as a JSON-encoded string
     clob_token_ids = raw.get("clobTokenIds") or []
+    if isinstance(clob_token_ids, str):
+        try:
+            clob_token_ids = _json.loads(clob_token_ids)
+        except (_json.JSONDecodeError, ValueError):
+            clob_token_ids = []
     yes_token_id = clob_token_ids[0] if clob_token_ids else None
 
     bid_yes = yes_price_mid - 0.01
@@ -175,7 +232,6 @@ def _parse_book(
         for b in bids
         if b.get("price") and b.get("size") and (mid - float(b["price"])) <= depth_window
     )
-    # YES asks = NO bids; convert to NO-side USD
     depth_no = sum(
         (1.0 - float(a["price"])) * float(a["size"])
         for a in asks
@@ -234,14 +290,3 @@ def _parse_date(val: Any) -> datetime | None:
             except ValueError:
                 continue
     return None
-
-
-def _infer_category(raw: dict) -> str:
-    """Heuristic category from tags if the top-level field is missing."""
-    tags = raw.get("tags") or []
-    if isinstance(tags, list):
-        for tag in tags:
-            name = (tag.get("label") or tag.get("name") or "").strip()
-            if name:
-                return name
-    return ""

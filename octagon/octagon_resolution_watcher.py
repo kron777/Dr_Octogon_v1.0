@@ -16,6 +16,7 @@ import structlog
 
 from octagon.octagon_ledger import OctagonLedger
 from octagon.octagon_models import Resolution
+from octagon.octagon_pnl import compute_paper_pnl
 from octagon.octagon_scanner import GAMMA_BASE, _get_with_retry
 
 log = structlog.get_logger(__name__)
@@ -51,8 +52,26 @@ async def _check_market(
         resolution = _extract_resolution(market_id, data)
         if resolution:
             ledger.log_resolution(resolution)
+            _close_open_trades(ledger, market_id, resolution.outcome, resolution.resolved_at)
         else:
             log.debug("watcher.not_resolved_yet", market_id=market_id)
+
+
+def _close_open_trades(
+    ledger: OctagonLedger, market_id: str, outcome: str, resolved_at: datetime
+) -> None:
+    trades = ledger.get_open_trades_for_market(market_id)
+    for trade in trades:
+        pnl = compute_paper_pnl(trade, outcome)
+        ledger.close_trade(trade.trade_id, pnl=pnl, closed_at=resolved_at)
+        log.info(
+            "watcher.trade_closed",
+            market_id=market_id,
+            trade_id=trade.trade_id,
+            side=trade.side,
+            outcome=outcome,
+            pnl_usd=round(pnl, 4),
+        )
 
 
 def _extract_resolution(market_id: str, data: dict) -> Resolution | None:

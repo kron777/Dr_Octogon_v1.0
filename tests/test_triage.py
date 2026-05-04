@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta
 import pytest
 
-from octagon.octagon_models import MarketSnapshot, Prediction
+from octagon.octagon_models import Adjustment, MarketSnapshot, Prediction
 from octagon.octagon_triage import filter as triage_filter
 
 
@@ -34,7 +34,7 @@ def _prediction(market_id: str, price: float = 0.50, age_seconds: int = 0) -> Pr
         p_yes_raw=0.55,
         confidence=0.7,
         edge=0.05,
-        reasoning="",
+        reasoning_trace_path="",
         evidence_refs=[],
         market_price_at_prediction=price,
         resolution_clarity=0.8,
@@ -42,10 +42,9 @@ def _prediction(market_id: str, price: float = 0.50, age_seconds: int = 0) -> Pr
         predicted_at=datetime.utcnow() - timedelta(seconds=age_seconds),
         ttl_seconds=3600,
         base_rate=0.5,
-        base_rate_ref_class="",
-        base_rate_source="",
+        base_rate_reference_class="",
         adjustments=[],
-        edge_cases_considered=[],
+        edge_cases=[],
     )
 
 

@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dr. Octogon</title>
+<link rel="icon" type="image/png" href="/logo.png">
+<style>
+  :root {
+    --bg-deep: #0A0E13;
+    --bg-panel: #161B22;
+    --bg-panel-soft: #0F141A;
+    --border-subtle: #21262D;
+    --border-emphasis: #30363D;
+    --chrome-edge: #484F58;
+    --text-primary: #E6EDF3;
+    --text-secondary: #7D8590;
+    --text-dim: #484F58;
+    --green-bright: #3FB950;
+    --green-data: #2EA043;
+    --green-dim: #1A4D2E;
+    --red: #F85149;
+    --amber: #D29922;
+    --font-mono: "SF Mono", "JetBrains Mono", Menlo, Consolas, ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: var(--bg-deep);
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-feature-settings: "tnum";
+    min-height: 100vh;
+  }
+  body { padding: 20px; }
+
+  /* ── Panels ── */
+  .panel {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-emphasis);
+    border-radius: 4px;
+    padding: 14px 16px;
+    position: relative;
+  }
+
+  /* ── Phillips-head screws ── */
+  .screw {
+    position: absolute;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 36% 36%, #252A31, #0A0E13);
+    border: 0.5px solid var(--chrome-edge);
+  }
+  .screw::before,
+  .screw::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 5px;
+    height: 1px;
+    background: var(--chrome-edge);
+  }
+  .screw::before { transform: translate(-50%, -50%) rotate(45deg); }
+  .screw::after  { transform: translate(-50%, -50%) rotate(-45deg); }
+  .screw.tl { top: 5px; left: 5px; }
+  .screw.tr { top: 5px; right: 5px; }
+  .screw.bl { bottom: 5px; left: 5px; }
+  .screw.br { bottom: 5px; right: 5px; }
+
+  .lbl { color: var(--text-secondary); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+  .num { color: var(--text-primary); font-weight: 500; }
+  .gn  { color: var(--green-bright); }
+  .rd  { color: var(--red); }
+  .am  { color: var(--amber); }
+  .dim  { color: var(--text-secondary); }
+  .vdim { color: var(--text-dim); }
+
+  .row  { display: flex; justify-content: space-between; align-items: center; }
+  .rule { height: 1px; background: var(--border-emphasis); margin: 8px 0; opacity: 0.6; }
+
+  .led { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--green-bright); vertical-align: middle; margin-right: 4px; }
+  .led.idle  { background: var(--green-dim); }
+  .led.error { background: var(--red); }
+  .pulse { animation: oct-pulse 1.6s ease-in-out infinite; }
+  @keyframes oct-pulse { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
+
+  .barwrap { height: 4px; background: var(--bg-panel-soft); border-radius: 2px; overflow: hidden; border: 0.5px solid var(--border-subtle); }
+  .bar { height: 100%; background: var(--green-data); transition: width 0.4s ease; }
+
+  /* ── Header ── */
+  .header { display: flex; gap: 10px; margin-bottom: 12px; align-items: stretch; }
+  .header > .panel { padding: 12px 14px; }
+
+  .logo-block { flex: 0 0 240px; display: flex; align-items: center; gap: 12px; }
+  .logo-block img { width: 64px; height: 64px; flex-shrink: 0; object-fit: contain; }
+  .logo-block .wm  { font-size: 15px; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; }
+  .logo-block .sub { font-size: 10px; color: var(--text-secondary); margin-top: 2px; }
+
+  .status-block { flex: 1; padding: 10px 14px; }
+  .status-block .leds { display: flex; gap: 16px; font-size: 11px; }
+
+  .total-block { flex: 0 0 240px; border-color: var(--green-data); }
+  .total-block .amount { font-size: 28px; font-weight: 500; letter-spacing: 0.02em; margin-top: 2px; }
+  .total-block .delta  { font-size: 11px; margin-top: 1px; }
+
+  /* ── Panels grid — responsive: 1 / 2 / 4 col ── */
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  @media (min-width: 800px) {
+    .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (min-width: 1400px) {
+    .grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  }
+
+  .arm-header { display: flex; justify-content: space-between; margin-bottom: 10px; font-size: 11px; }
+  .arm-list   { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+  .arm-list .item { display: flex; align-items: center; gap: 8px; }
+  .arm-list .item .q { color: var(--text-secondary); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .arm-list .item .v { font-weight: 500; flex-shrink: 0; }
+  .arm-list .empty   { color: var(--text-dim); font-style: italic; font-size: 11px; padding: 12px 0; text-align: center; }
+
+  .stat-large { font-size: 24px; font-weight: 500; }
+  .stat-small { font-size: 11px; color: var(--text-secondary); }
+
+  /* ── Bottom instruments ── */
+  .instruments { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+  .instruments .panel { padding: 8px 12px; }
+  .instruments .lbl   { font-size: 9px; letter-spacing: 0.1em; }
+  .instruments .v     { font-size: 13px; font-weight: 500; margin-top: 2px; }
+
+  /* citation chart */
+  .cite-bars { display: flex; align-items: end; gap: 3px; height: 26px; margin-top: 4px; }
+  .cite-bars > div { flex: 1; background: var(--green-data); border-radius: 1px; min-height: 2px; transition: height 0.4s ease; }
+
+  /* ── Connection indicator ── */
+  .conn-status { position: fixed; bottom: 10px; right: 10px; font-size: 10px; color: var(--text-dim); padding: 4px 8px; background: var(--bg-panel); border: 0.5px solid var(--border-subtle); border-radius: 3px; z-index: 10; }
+  .conn-status.ok  { color: var(--green-bright); }
+  .conn-status.err { color: var(--red); }
+
+  /* ── Freq Lever ── */
+  .freq-lever { margin-top: 10px; }
+  .fl-body { display: flex; gap: 20px; align-items: flex-start; margin-top: 6px; flex-wrap: wrap; }
+  .fl-stats { display: flex; flex-direction: column; gap: 4px; min-width: 180px; }
+  .fl-settings { display: flex; flex-direction: column; gap: 3px; font-size: 10px; color: var(--text-secondary); min-width: 160px; }
+  .fl-settings .row { gap: 12px; }
+  .fl-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding-top: 8px; border-top: 1px solid var(--border-subtle); margin-top: 6px; }
+  .fl-radio { display: flex; gap: 4px; align-items: center; cursor: pointer; font-size: 11px; color: var(--text-secondary); }
+  .fl-radio input { accent-color: var(--green-bright); cursor: pointer; }
+  .fl-radio.active { color: var(--green-bright); }
+  .fl-select { background: var(--bg-panel-soft); border: 1px solid var(--border-emphasis); color: var(--text-primary); font-family: var(--font-mono); font-size: 10px; padding: 3px 6px; border-radius: 2px; }
+  .fl-select:disabled { opacity: 0.4; }
+  .fl-save { background: var(--green-dim); border: 1px solid var(--green-data); color: var(--green-bright); font-family: var(--font-mono); font-size: 10px; padding: 3px 10px; cursor: pointer; border-radius: 2px; letter-spacing: 0.06em; }
+  .fl-save:hover { background: var(--green-data); }
+  .fl-warning { color: var(--red); font-size: 10px; padding: 4px 0; letter-spacing: 0.04em; }
+  .fl-saved { color: var(--green-bright); font-size: 10px; padding: 4px 0; }
+  .fl-slider-section { padding-top: 8px; border-top: 1px solid var(--border-subtle); margin-top: 6px; }
+  .fl-pos-label { font-size: 10px; color: var(--text-secondary); margin-bottom: 6px; letter-spacing: 0.05em; }
+  .fl-pos-label #fl-pos-name { color: var(--green-bright); font-weight: 500; }
+  .fl-slider-wrap { display: flex; flex-direction: column; gap: 4px; }
+  .fl-slider { width: 100%; accent-color: var(--green-bright); cursor: pointer; }
+  .fl-slider:disabled { opacity: 0.35; cursor: default; }
+  .fl-ticks { display: flex; justify-content: space-between; }
+  .fl-tick { font-size: 9px; color: var(--text-secondary); text-align: center; flex: 1; }
+  .fl-tick.active { color: var(--green-bright); font-weight: 700; }
+  .fl-tick.warn { color: var(--red); }
+
+  /* ── Watermark — mascot at 3.5% opacity behind panels, wide viewport only ── */
+  @media (min-width: 1400px) {
+    body::before {
+      content: '';
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 720px;
+      height: 720px;
+      background: url('/logo.png') center / contain no-repeat;
+      opacity: 0.035;
+      pointer-events: none;
+      z-index: 0;
+    }
+    .header, .grid, .instruments { position: relative; z-index: 1; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Header ── -->
+<div class="header">
+  <div class="panel logo-block">
+    <span class="screw tl"></span><span class="screw tr"></span>
+    <span class="screw bl"></span><span class="screw br"></span>
+    <img src="/logo.png" alt="Dr. Octogon">
+    <div>
+      <div class="wm">Dr. Octogon</div>
+      <div class="sub" id="sub-meta">v0.2 · phase 0 · paper</div>
+    </div>
+  </div>
+
+  <div class="panel status-block">
+    <span class="screw tl"></span><span class="screw tr"></span>
+    <span class="screw bl"></span><span class="screw br"></span>
+    <div class="row">
+      <div class="lbl">system</div>
+      <div class="leds">
+        <span><span class="led" id="led-scan"></span><span class="dim">scan</span></span>
+        <span><span class="led" id="led-research"></span><span class="dim">research</span></span>
+        <span><span class="led" id="led-ledger"></span><span class="dim">ledger</span></span>
+        <span><span class="led idle" id="led-exec"></span><span class="dim">exec</span></span>
+      </div>
+    </div>
+    <div class="rule"></div>
+    <div class="row" style="font-size: 11px;">
+      <span class="dim">cycle <span class="num" id="m-cycle">0</span></span>
+      <span class="dim">uptime <span class="num" id="m-uptime">—</span></span>
+      <span class="dim">today <span class="num" id="m-today">0</span> pred</span>
+    </div>
+  </div>
+
+  <div class="panel total-block">
+    <span class="screw tl"></span><span class="screw tr"></span>
+    <span class="screw bl"></span><span class="screw br"></span>
+    <div class="row">
+      <span class="lbl">$ total · paper</span>
+      <span class="lbl gn"><span class="led pulse"></span>live</span>
+    </div>
+    <div class="amount" id="m-total">$0.00</div>
+    <div class="delta gn" id="m-delta">+$0.00 today</div>
+  </div>
+</div>
+
+<!-- ── Eight arms ── -->
+<div class="grid">
+
+  <div class="panel">
+    <span class="screw tl"></span><span class="screw tr"></span><span class="screw bl"></span><span class="screw br"></span>
+    <div class="arm-header"><span class="lbl"><span class="led pulse"></span>arm 1 · scanner</span><span class="lbl" id="arm1-tracking">tracking 0</span></div>
+    <div style="display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px;">
+      <span class="stat-large" id="arm1-active">0</span>
+      <span class="stat-small">in research · <span id="arm1-queued">0</span> queued</span>
+    </div>
+    <div style="display: flex; gap: 4px; margin-top: 6px;">
+      <div class="barwrap" style="flex: 1;"><div class="bar" id="arm1-bar1" style="width: 0%;"></div></div>
+      <div class="barwrap" style="flex: 1;"><div class="bar" id="arm1-bar2" style="width: 0%;"></div></div>
+      <div class="barwrap" style="flex: 1;"><div class="bar" id="arm1-bar3" style="width: 0%;"></div></div>
+    </div>
+    <div class="row" style="margin-top: 4px; font-size: 9px; color: var(--text-dim);">
+      <span>tracked</span><span>active</span><span>queued</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <span class="screw tl"></span><span class="screw tr"></span><span class="screw bl"></span><span class="screw br"></span>
+    <div class="arm-header"><span class="lbl"><span class="led pulse"></span>arm 2 · top edges</span><span class="lbl">last 24h</span></div>
+    <div class="arm-list" id="arm2-list"><div class="empty">no edges yet</div></div>
+  </div>
+
+  <div class="panel">
+    <span class="screw tl"></span><span class="screw tr"></span><span class="screw bl"></span><span class="screw br"></span>
+    <div class="arm-header"><span class="lbl"><span class="led pulse"></span>arm 3 · recent predictions</span><span class="lbl" id="arm3-today">0 today</span></div>
+    <div class="arm-list" id="arm3-list"><div class="empty">no predictions logged</div></div>
+  </div>
+
+  <div class="panel">
+    <span class="screw tl"></span><span class="screw tr"></span><span class="screw bl"></span><span class="screw br"></span>
+    <div class="arm-header"><span class="lbl"><span class="led idle"></span>arm 4 · calibration</span><span class="lbl">brier · n</span></div>
+    <div class="arm-list" id="arm4-list"></div>
+    <div class="stat-small" id="arm4-msg" style="margin-top: 6px; font-style: italic;"></div>
+  </div>
+
+  <div class="panel">
+    <span class="screw tl"></span><span class="screw tr"></span><span class="screw bl"></span><span class="screw br"></span>
+    <div class="arm-header"><span class="lbl"><span class="led" id="led-arm5"></span>arm 5 · sources</span><span class="lbl" id="arm5-mode">raw count</span></div>
+    <div class="arm-list" id="arm5-list"><div class="empty">no sources cited yet</div></div>
+  </div>
+
+  <div class="panel">
+    <span class="screw tl"></span><span class="screw tr"></span><span class="screw bl"></span><span class="screw br"></span>
+    <div class="arm-header"><span class="lbl"><span class="led pulse"></span>arm 6 · citation</span><span class="lbl">7d</span></div>
+    <div style="display: flex; align-items: baseline; gap: 6px; margin-bottom: 6px;">
+      <span class="stat-large gn" id="arm6-rate">—</span>
+      <span class="stat-small" id="arm6-counts">citeable</span>
+    </div>
+    <div class="cite-bars" id="arm6-bars"></div>
+    <div class="row" style="font-size: 9px; color: var(--text-dim); margin-top: 3px;">
+      <span id="arm6-d0">—</span><span id="arm6-d6">—</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <span class="screw tl"></span><span class="screw tr"></span><span class="screw bl"></span><span class="screw br"></span>
+    <div class="arm-header"><span class="lbl"><span class="led pulse"></span>arm 7 · pending</span><span class="lbl" id="arm7-open">0 open</span></div>
+    <div style="display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px;">
+      <span class="stat-large" id="arm7-time">—</span>
+      <span class="stat-small">to next resolution</span>
+    </div>
+    <div class="stat-small" id="arm7-detail" style="line-height: 1.5;">—</div>
+  </div>
+
+  <div class="panel">
+    <span class="screw tl"></span><span class="screw tr"></span><span class="screw bl"></span><span class="screw br"></span>
+    <div class="arm-header"><span class="lbl"><span class="led" id="led-arm8"></span>arm 8 · resolutions</span><span class="lbl">last 5</span></div>
+    <div class="arm-list" id="arm8-list"><div class="empty">no resolutions yet</div></div>
+  </div>
+
+</div>
+
+<!-- ── Freq Lever ── -->
+<div class="panel freq-lever">
+  <span class="screw tl"></span><span class="screw tr"></span><span class="screw bl"></span><span class="screw br"></span>
+  <div class="arm-header">
+    <span class="lbl"><span class="led" id="fl-led"></span>freq lever · trading aggression</span>
+    <span class="lbl" id="fl-mode-label">auto</span>
+  </div>
+
+  <div class="fl-body">
+    <div class="fl-stats">
+      <div class="row"><span class="lbl">starting</span><span class="num" id="fl-starting">—</span></div>
+      <div class="row"><span class="lbl">exposure</span><span class="num rd" id="fl-exposure">—</span></div>
+      <div class="row"><span class="lbl">realized</span><span class="num" id="fl-realized">—</span></div>
+      <div class="row" style="border-top: 1px solid #333; margin-top: 3px; padding-top: 3px;"><span class="lbl">available</span><span class="num gn" id="fl-bankroll">—</span></div>
+      <div class="row" style="margin-top: 6px;"><span class="lbl">auto pos</span><span class="num gn" id="fl-auto-tier">—</span></div>
+      <div class="row"><span class="lbl">active pos</span><span class="num gn" id="fl-active-tier">—</span></div>
+    </div>
+    <div class="fl-settings">
+      <div class="row"><span>max stake</span><span id="fl-max-stake">—</span></div>
+      <div class="row"><span>min edge</span><span id="fl-min-edge">—</span></div>
+      <div class="row"><span>daily cap</span><span id="fl-daily-cap">—</span></div>
+      <div class="row"><span>kelly frac</span><span id="fl-kelly">—</span></div>
+    </div>
+    <div style="flex: 1;">
+      <div id="fl-warning" class="fl-warning" style="display: none;">
+        ⚠ OVERRIDE — manual tier exceeds bankroll-allowed tier
+      </div>
+    </div>
+  </div>
+
+  <div class="fl-controls">
+    <label class="fl-radio" id="fl-auto-label">
+      <input type="radio" name="fl-mode" value="auto" id="fl-auto-radio"> AUTO
+    </label>
+    <label class="fl-radio" id="fl-manual-label">
+      <input type="radio" name="fl-mode" value="manual" id="fl-manual-radio"> MANUAL
+    </label>
+    <button id="fl-save-btn" class="fl-save">SAVE</button>
+    <span id="fl-save-status" class="fl-saved" style="display: none;">saved</span>
+  </div>
+
+  <div class="fl-slider-section">
+    <div class="fl-pos-label"><span id="fl-pos-name">P03_Default</span> · <span id="fl-pos-label-text">Default</span></div>
+    <div class="fl-slider-wrap">
+      <input type="range" id="fl-slider" min="1" max="10" step="1" value="3" class="fl-slider" disabled>
+      <div class="fl-ticks" id="fl-ticks"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Bottom instruments ── -->
+<div class="instruments">
+  <div class="panel"><span class="screw tl"></span><span class="screw tr"></span><span class="screw bl"></span><span class="screw br"></span>
+    <div class="lbl">cycle</div><div class="v" id="i-cycle">0</div></div>
+  <div class="panel"><span class="screw tl"></span><span class="screw tr"></span><span class="screw bl"></span><span class="screw br"></span>
+    <div class="lbl">next scan</div>
+    <div style="display: flex; align-items: center; gap: 6px; margin-top: 2px;">
+      <div class="barwrap" style="flex: 1;"><div class="bar" id="i-next-bar" style="width: 0%;"></div></div>
+      <span class="num" style="font-size: 11px;" id="i-next">—</span>
+    </div></div>
+  <div class="panel"><span class="screw tl"></span><span class="screw tr"></span><span class="screw bl"></span><span class="screw br"></span>
+    <div class="lbl">predictions</div><div class="v" id="i-preds">0</div></div>
+  <div class="panel"><span class="screw tl"></span><span class="screw tr"></span><span class="screw bl"></span><span class="screw br"></span>
+    <div class="lbl">phase</div><div class="v gn" id="i-phase">phase 0</div></div>
+  <div class="panel"><span class="screw tl"></span><span class="screw tr"></span><span class="screw bl"></span><span class="screw br"></span>
+    <div class="lbl">uptime</div><div class="v" id="i-uptime">—</div></div>
+  <div class="panel"><span class="screw tl"></span><span class="screw tr"></span><span class="screw bl"></span><span class="screw br"></span>
+    <div class="lbl">core</div>
+    <div style="display: flex; align-items: center; gap: 6px; margin-top: 2px;">
+      <span class="led pulse"></span><span class="num gn" style="font-size: 11px;" id="i-core">nominal</span>
+    </div></div>
+</div>
+
+<div class="conn-status" id="conn">connecting…</div>
+
+<script>
+(function() {
+  const $ = (id) => document.getElementById(id);
+  const trunc = (s, n) => (s || "").length > n ? s.slice(0, n - 1) + "…" : (s || "");
+  const fmt = {
+    money: (n) => "$" + (n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+    edge: (n) => (n >= 0 ? "+" : "") + n.toFixed(2),
+    pct: (n) => Math.round((n || 0) * 100) + "%",
+    uptime: (s) => {
+      if (!s && s !== 0) return "—";
+      if (s < 60) return s + "s";
+      if (s < 3600) return Math.floor(s / 60) + "m";
+      if (s < 86400) return Math.floor(s / 3600) + "h " + Math.floor((s % 3600) / 60) + "m";
+      return Math.floor(s / 86400) + "d " + Math.floor((s % 86400) / 3600) + "h";
+    },
+    nextscan: (s) => {
+      if (s === null || s === undefined) return "—";
+      const m = Math.floor(s / 60), sec = s % 60;
+      return m + ":" + String(sec).padStart(2, "0");
+    }
+  };
+
+  function setLed(id, status) {
+    const el = $(id);
+    if (!el) return;
+    el.className = "led" + (status === "active" ? " pulse" : status === "idle" || status === "disabled" || status === "no_db" ? " idle" : "");
+  }
+
+  function render(state) {
+    if (!state) return;
+    const sys   = state.system || {};
+    const total = state.total  || {};
+
+    setLed("led-scan",     sys.scan_status);
+    setLed("led-research", sys.research_status);
+    setLed("led-ledger",   sys.ledger_status === "active" ? "active" : "idle");
+    setLed("led-exec",     sys.exec_status);
+
+    $("m-cycle").textContent  = sys.cycle || 0;
+    $("m-uptime").textContent = fmt.uptime(sys.uptime_seconds);
+    $("m-today").textContent  = sys.predictions_today || 0;
+    $("sub-meta").textContent = `v0.2 · ${sys.phase || "phase 0"} · paper`;
+
+    $("m-total").textContent = fmt.money(total.paper_pnl);
+    const delta = total.today_pnl || 0;
+    $("m-delta").textContent = (delta >= 0 ? "+" : "−") + fmt.money(Math.abs(delta)) + " today";
+    $("m-delta").className   = "delta " + (delta >= 0 ? "gn" : "rd");
+
+    // Arm 1 — scanner
+    const a1 = state.arm1_scanner || {};
+    $("arm1-tracking").textContent = `tracking ${a1.tracking || 0}`;
+    $("arm1-active").textContent   = a1.in_research || 0;
+    $("arm1-queued").textContent   = a1.queued || 0;
+    const tracked = a1.tracking || 0, active = a1.in_research || 0, queued = a1.queued || 0;
+    const max = Math.max(tracked, 1);
+    $("arm1-bar1").style.width = "100%";
+    $("arm1-bar2").style.width = Math.min(100, (active / max) * 100) + "%";
+    $("arm1-bar3").style.width = Math.min(100, (queued / max) * 100) + "%";
+
+    // Arm 2 — top edges
+    const edges = state.arm2_edges || [];
+    const a2 = $("arm2-list");
+    a2.innerHTML = "";
+    if (edges.length === 0) {
+      a2.innerHTML = '<div class="empty">no edges yet</div>';
+    } else {
+      edges.forEach(e => {
+        const div = document.createElement("div");
+        div.className = "item";
+        const cls   = e.edge >= 0 ? "gn" : "rd";
+        const arrow = e.edge >= 0 ? "▲" : "▼";
+        div.innerHTML = `<span class="q">${trunc(e.question, 28)}</span><span class="v ${cls}">${arrow} ${fmt.edge(e.edge)}</span>`;
+        a2.appendChild(div);
+      });
+    }
+
+    // Arm 3 — recent predictions
+    const recent = state.arm3_recent || [];
+    $("arm3-today").textContent = `${sys.predictions_today || 0} today`;
+    const a3 = $("arm3-list");
+    a3.innerHTML = "";
+    if (recent.length === 0) {
+      a3.innerHTML = '<div class="empty">no predictions logged</div>';
+    } else {
+      recent.forEach(r => {
+        const div = document.createElement("div");
+        div.className = "item";
+        const flag = r.unciteable ? '<span class="vdim" style="font-size: 10px;">[uncite]</span>' : '';
+        div.innerHTML = `<span class="vdim" style="width: 26px; flex-shrink: 0;">${r.age_label || ""}</span><span class="q">${trunc(r.question, 22)} ${flag}</span><span class="v">${r.p_yes.toFixed(2)}</span>`;
+        a3.appendChild(div);
+      });
+    }
+
+    // Arm 4 — calibration
+    const calib = state.arm4_calibration || {};
+    const a4 = $("arm4-list");
+    a4.innerHTML = "";
+    (calib.rows || []).forEach(c => {
+      const div = document.createElement("div");
+      div.className = "item";
+      const biasStr = c.bias >= 0 ? "+" + c.bias.toFixed(2) : c.bias.toFixed(2);
+      div.innerHTML = `<span class="q dim">${c.category}</span><span class="v">${c.brier.toFixed(2)} <span class="vdim">· ${biasStr} · n=${c.n}</span></span>`;
+      a4.appendChild(div);
+    });
+    $("arm4-msg").textContent = calib.phase0_message || "";
+
+    // Arm 5 — sources
+    const sources = state.arm5_sources || {};
+    const showCalibrated = (sources.calibrated || []).length > 0;
+    $("arm5-mode").textContent = showCalibrated ? "trust score" : "raw count";
+    const a5 = $("arm5-list");
+    a5.innerHTML = "";
+    const items = showCalibrated ? sources.calibrated : sources.raw_counts;
+    if (!items || items.length === 0) {
+      a5.innerHTML = '<div class="empty">no sources cited yet</div>';
+    } else {
+      items.forEach(s => {
+        const div = document.createElement("div");
+        div.className = "item";
+        if (showCalibrated) {
+          const pct = Math.round((s.trust || 0) * 100);
+          div.innerHTML = `<span class="q dim" style="max-width: 110px;">${trunc(s.source, 18)}</span><div class="barwrap" style="flex: 1;"><div class="bar" style="width: ${pct}%"></div></div><span class="v" style="width: 28px; text-align: right;">${(s.trust || 0).toFixed(2)}</span>`;
+        } else {
+          div.innerHTML = `<span class="q dim">${trunc(s.source, 22)}</span><span class="v">${s.n}</span>`;
+        }
+        a5.appendChild(div);
+      });
+    }
+
+    // Arm 6 — citation
+    const cite = state.arm6_citation || {};
+    $("arm6-rate").textContent   = cite.rate !== undefined ? fmt.pct(cite.rate) : "—";
+    $("arm6-counts").textContent = `${cite.citeable_total || 0} citeable · ${cite.unciteable_total || 0} rejected`;
+    const buckets = cite.buckets || [];
+    const a6 = $("arm6-bars");
+    a6.innerHTML = "";
+    buckets.forEach(b => {
+      const div = document.createElement("div");
+      const h = b.n > 0 ? Math.max(8, b.rate * 100) : 4;
+      div.style.height = h + "%";
+      if (b.n === 0) div.style.background = "var(--border-emphasis)";
+      a6.appendChild(div);
+    });
+    if (buckets.length > 0) {
+      $("arm6-d0").textContent = buckets[0].date.slice(5);
+      $("arm6-d6").textContent = buckets[buckets.length - 1].date.slice(5);
+    }
+
+    // Arm 7 — pending
+    const pending = state.arm7_pending || {};
+    $("arm7-open").textContent = `${pending.open || 0} open`;
+    if (pending.next) {
+      $("arm7-time").textContent = pending.next.time_to_resolve || "—";
+      const p = pending.next;
+      const detail = `${trunc(p.question, 38)} · ${p.category}` +
+        (p.p_yes !== null ? `<br>predicted ${p.p_yes.toFixed(2)} · market ${p.market_price !== null ? p.market_price.toFixed(2) : '—'}` : '');
+      $("arm7-detail").innerHTML = detail;
+    } else {
+      $("arm7-time").textContent   = "—";
+      $("arm7-detail").textContent = "no pending resolutions";
+    }
+
+    // Arm 8 — resolutions
+    const resolutions = state.arm8_resolutions || [];
+    const a8 = $("arm8-list");
+    a8.innerHTML = "";
+    if (resolutions.length === 0) {
+      a8.innerHTML = '<div class="empty">no resolutions yet</div>';
+    } else {
+      resolutions.forEach(r => {
+        const div = document.createElement("div");
+        div.className = "item";
+        const mark = r.hit === true ? "✓" : r.hit === false ? "✗" : "·";
+        const cls  = r.hit === true ? "gn" : r.hit === false ? "rd" : "vdim";
+        const pred = r.p_yes !== null ? `p ${r.p_yes.toFixed(2)}` : "—";
+        div.innerHTML = `<span class="${cls}" style="width: 12px; flex-shrink: 0; font-weight: 500;">${mark}</span><span class="q">${trunc(r.question, 22)}</span><span class="vdim" style="font-size: 10px;">${(r.outcome || '').toLowerCase()} · ${pred}</span>`;
+        a8.appendChild(div);
+      });
+    }
+
+    // Freq lever
+    renderFreqLever(state.freq_lever || {});
+
+    // Bottom instruments
+    $("i-cycle").textContent  = sys.cycle || 0;
+    $("i-next").textContent   = fmt.nextscan(sys.next_scan_seconds);
+    const loopMax = sys.loop_interval_seconds || 900;
+    const nextSec = sys.next_scan_seconds === null || sys.next_scan_seconds === undefined ? loopMax : sys.next_scan_seconds;
+    $("i-next-bar").style.width = (100 - (nextSec / loopMax) * 100) + "%";
+    $("i-preds").textContent  = total.predictions_logged || 0;
+    $("i-phase").textContent  = sys.phase || "phase 0";
+    $("i-uptime").textContent = fmt.uptime(sys.uptime_seconds);
+    $("i-core").textContent   = sys.ledger_status === "no_db" ? "no db" : "nominal";
+  }
+
+  // ── Freq Lever ──
+  let _flState = { allPositions: [], autoPosition: 3 };
+
+  function _renderSettings(s) {
+    $("fl-max-stake").textContent = s.max_stake_usd !== undefined ? "$" + s.max_stake_usd.toFixed(2) : "—";
+    $("fl-min-edge").textContent  = (s.min_edge_to_trade !== undefined && s.max_edge_to_trade !== undefined)
+      ? Math.round(s.min_edge_to_trade * 100) + "–" + Math.round(s.max_edge_to_trade * 100) + "pp"
+      : (s.min_edge_to_trade !== undefined ? Math.round(s.min_edge_to_trade * 100) + "pp" : "—");
+    $("fl-daily-cap").textContent = s.daily_loss_cap_usd !== undefined ? "$" + s.daily_loss_cap_usd.toFixed(2) : "—";
+    $("fl-kelly").textContent     = s.kelly_fraction !== undefined ? s.kelly_fraction.toFixed(2) : "—";
+  }
+
+  function _renderTicks(currentPos, autoPos, mode) {
+    const ticks = $("fl-ticks");
+    ticks.innerHTML = "";
+    for (let i = 1; i <= 10; i++) {
+      const tick = document.createElement("span");
+      tick.className = "fl-tick";
+      tick.textContent = i;
+      if (i === currentPos) tick.classList.add("active");
+      if (mode === "manual" && i > autoPos) tick.classList.add("warn");
+      ticks.appendChild(tick);
+    }
+  }
+
+  function renderFreqLever(fl) {
+    if (!fl || !fl.effective_position) return;
+
+    const mode = fl.mode || "auto";
+    _flState.allPositions = fl.all_positions || [];
+    _flState.autoPosition = fl.auto_position || 3;
+
+    $("fl-mode-label").textContent = mode;
+
+    // Bankroll breakdown
+    $("fl-starting").textContent = "$" + (fl.bankroll_starting || 0).toFixed(2);
+    const exp = fl.bankroll_exposure || 0;
+    $("fl-exposure").textContent = exp > 0 ? "−$" + exp.toFixed(4) : "$0.00";
+    const rlz = fl.bankroll_realized || 0;
+    $("fl-realized").textContent = (rlz >= 0 ? "+$" : "−$") + Math.abs(rlz).toFixed(4);
+    $("fl-realized").className   = "num " + (rlz >= 0 ? "gn" : "rd");
+    $("fl-bankroll").textContent = "$" + (fl.bankroll || 0).toFixed(2);
+
+    // Position display
+    $("fl-auto-tier").textContent   = "P" + String(fl.auto_position || 3).padStart(2, "0");
+    $("fl-active-tier").textContent = "P" + String(fl.effective_position || 3).padStart(2, "0");
+    $("fl-active-tier").className   = "num " + (fl.override_warning ? "am" : "gn");
+
+    // Effective settings
+    _renderSettings(fl.effective_settings || {});
+
+    // Warning / LED
+    $("fl-warning").style.display = fl.override_warning ? "block" : "none";
+    $("fl-led").className = "led" + (fl.override_warning ? " error" : " pulse");
+
+    // Sync radio buttons (skip if user is on them)
+    const active = document.activeElement;
+    if (active !== $("fl-auto-radio") && active !== $("fl-manual-radio")) {
+      $("fl-auto-radio").checked   = mode === "auto";
+      $("fl-manual-radio").checked = mode === "manual";
+    }
+    $("fl-auto-label").className   = "fl-radio" + (mode === "auto"   ? " active" : "");
+    $("fl-manual-label").className = "fl-radio" + (mode === "manual" ? " active" : "");
+
+    // Sync slider (skip if user is dragging)
+    const slider = $("fl-slider");
+    slider.disabled = mode === "auto";
+    if (active !== slider) {
+      slider.value = fl.effective_position || 3;
+      $("fl-pos-name").textContent      = fl.position_name  || "—";
+      $("fl-pos-label-text").textContent = fl.position_label || "—";
+    }
+
+    // Ticks
+    _renderTicks(parseInt(slider.value), _flState.autoPosition, mode);
+  }
+
+  // Slider live-preview while dragging
+  $("fl-slider").addEventListener("input", () => {
+    const pos  = parseInt($("fl-slider").value);
+    const mode = $("fl-auto-radio").checked ? "auto" : "manual";
+    const positions = _flState.allPositions;
+    if (positions.length >= pos) {
+      const p = positions[pos - 1];
+      $("fl-pos-name").textContent       = p.name;
+      $("fl-pos-label-text").textContent  = p.label;
+      _renderSettings(p);
+      _renderTicks(pos, _flState.autoPosition, mode);
+      const warn = mode === "manual" && pos > _flState.autoPosition;
+      $("fl-warning").style.display   = warn ? "block" : "none";
+      $("fl-active-tier").textContent = "P" + String(pos).padStart(2, "0");
+      $("fl-active-tier").className   = "num " + (warn ? "am" : "gn");
+    }
+  });
+
+  // Save button
+  $("fl-save-btn").addEventListener("click", () => {
+    const mode            = $("fl-auto-radio").checked ? "auto" : "manual";
+    const manual_position = parseInt($("fl-slider").value);
+    fetch("/freq_lever", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode, manual_position }),
+    })
+      .then(r => r.json())
+      .then(() => {
+        const status = $("fl-save-status");
+        status.style.display = "inline";
+        setTimeout(() => { status.style.display = "none"; }, 2000);
+      })
+      .catch(err => console.error("freq_lever save failed:", err));
+  });
+
+  // Radio change: enable/disable slider; snap to auto pos when switching back to AUTO
+  document.querySelectorAll("input[name='fl-mode']").forEach(r => {
+    r.addEventListener("change", () => {
+      const isAuto = $("fl-auto-radio").checked;
+      $("fl-slider").disabled        = isAuto;
+      $("fl-auto-label").className   = "fl-radio" + (isAuto  ? " active" : "");
+      $("fl-manual-label").className = "fl-radio" + (!isAuto ? " active" : "");
+      if (isAuto) {
+        $("fl-slider").value = _flState.autoPosition;
+        _renderTicks(_flState.autoPosition, _flState.autoPosition, "auto");
+      }
+    });
+  });
+
+  // ── Connection: prefer SSE, fall back to polling ──
+  let evtSrc = null;
+  const conn = $("conn");
+
+  function startSSE() {
+    try {
+      evtSrc = new EventSource("/sse/state");
+      evtSrc.onmessage = (e) => {
+        try { render(JSON.parse(e.data)); conn.textContent = "● live"; conn.className = "conn-status ok"; }
+        catch (err) { console.error(err); }
+      };
+      evtSrc.onerror = () => {
+        conn.textContent = "○ reconnecting"; conn.className = "conn-status err";
+        evtSrc.close();
+        evtSrc = null;
+        setTimeout(startPolling, 2000);
+      };
+    } catch (e) { startPolling(); }
+  }
+
+  function startPolling() {
+    conn.textContent = "○ polling"; conn.className = "conn-status";
+    function tick() {
+      fetch("/api/state")
+        .then(r => r.json())
+        .then(state => { render(state); conn.textContent = "● polling"; conn.className = "conn-status ok"; })
+        .catch(() => { conn.textContent = "✕ offline"; conn.className = "conn-status err"; });
+    }
+    tick();
+    setInterval(tick, 3000);
+  }
+
+  fetch("/api/state").then(r => r.json()).then(render).catch(() => {});
+  startSSE();
+})();
+</script>
+
+</body>
+</html>

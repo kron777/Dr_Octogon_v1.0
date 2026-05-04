@@ -4,10 +4,16 @@ Whitelist-driven source fetcher.
 fetch_for_market() → list[SourceDoc]
 
 Flow:
-  1. DuckDuckGo news + text search scoped to whitelisted domains
-  2. Filter results to whitelist; drop blacklisted domains silently
-  3. Fetch each URL via httpx; extract article text with BeautifulSoup
-  4. Cache content for CACHE_TTL_SECONDS keyed on URL hash; rate-limit per domain
+  1. Google News RSS search — returns (google_redirect_url, title) pairs where
+     the publisher domain (<source url> attribute) passes the whitelist check
+  2. Fetch each Google redirect URL via httpx (follow_redirects=True lands on
+     the real article); extract article text with BeautifulSoup
+  3. If full article fetch fails (paywall, 403, JS-rendered), fall back to the
+     title snippet — content is prefixed "[SNIPPET — full article unavailable]"
+     so the forecaster knows the evidence quality
+  4. SourceDoc.url is the final URL after redirects (real article URL)
+  5. Cache content for CACHE_TTL_SECONDS keyed on input URL hash; rate-limit
+     per domain
 
 .gov TLD is automatically whitelisted.
 Anything in the blacklist is hard-dropped regardless of how the URL was found.
@@ -50,31 +56,38 @@ _HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
+# Google GDPR consent bypass cookie — prevents landing on consent.google.com gate
+_GOOGLE_CONSENT_COOKIES = {
+    "SOCS": "CAISHAgBEhJnd3NfMjAyMzA4MDktMF9SQzEaAmVuIAEaBgiAnY2mBg=="
+}
+
+# Domains that indicate we hit a Google gate page rather than the real article
+_GOOGLE_GATE_DOMAINS = {"consent.google.com", "news.google.com"}
+
 
 async def fetch_for_market(market: MarketSnapshot) -> list[SourceDoc]:
     query = market.question
-    candidate_urls: list[str] = []
 
-    # DuckDuckGo search — run in executor since the library is synchronous
+    # Google News RSS — pre-filtered by publisher domain (whitelist checked in search)
+    # Returns (google_redirect_url, title) pairs; redirect resolves to real article
+    candidates: list[tuple[str, str]] = []
     try:
-        loop = asyncio.get_event_loop()
-        urls = await loop.run_in_executor(None, _ddg_search, query)
-        candidate_urls.extend(urls)
+        candidates = await _google_news_search(query)
     except Exception as exc:
-        log.warning("sources.ddg_failed", market_id=market.market_id, error=str(exc))
+        log.warning("sources.search_failed", market_id=market.market_id, error=str(exc))
 
-    # Filter to whitelist before fetching anything
-    whitelisted = [u for u in candidate_urls if _is_whitelisted(u)]
     log.debug(
         "sources.candidates",
         market_id=market.market_id,
-        total=len(candidate_urls),
-        whitelisted=len(whitelisted),
+        whitelisted=len(candidates),
     )
 
     # Fetch concurrently with a semaphore to avoid hammering
     sem = asyncio.Semaphore(4)
-    tasks = [_fetch_with_sem(sem, url) for url in whitelisted[:MAX_SOURCES_PER_MARKET]]
+    tasks = [
+        _fetch_with_sem(sem, url, snippet)
+        for url, snippet in candidates[:MAX_SOURCES_PER_MARKET]
+    ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     docs: list[SourceDoc] = []
@@ -82,44 +95,92 @@ async def fetch_for_market(market: MarketSnapshot) -> list[SourceDoc]:
         if isinstance(r, SourceDoc):
             docs.append(r)
 
+    n_articles = sum(1 for d in docs if not d.content.startswith("[SNIPPET"))
+    n_snippets = len(docs) - n_articles
     log.info(
         "sources.done",
         market_id=market.market_id,
         fetched=len(docs),
+        articles=n_articles,
+        snippets=n_snippets,
     )
     return docs
 
 
-def _ddg_search(query: str) -> list[str]:
-    from duckduckgo_search import DDGS
-    urls: list[str] = []
-    with DDGS() as ddgs:
-        # Recent news
-        try:
-            for r in ddgs.news(query, max_results=15):
-                if r.get("url"):
-                    urls.append(r["url"])
-        except Exception:
-            pass
-        # Broader text search scoped to known primary domains
-        site_filter = " OR ".join(
-            f"site:{d}" for d in CONFIG.source_whitelist_domains[:8]
-        )
-        try:
-            for r in ddgs.text(f"{query} {site_filter}", max_results=10):
-                if r.get("href"):
-                    urls.append(r["href"])
-        except Exception:
-            pass
-    return urls
+async def _google_news_search(query: str, n_results: int = 20) -> list[tuple[str, str]]:
+    """
+    Google News RSS search — no API key.
+    Returns (google_redirect_url, title) pairs for whitelisted publishers only.
+
+    RSS item structure:
+      <link>   — Google redirect URL (news.google.com/rss/articles/...) → real article
+      <source url="https://publisher.com"> — publisher domain for whitelist check
+      <description> — HTML with <a href="same_google_redirect_url">
+
+    We whitelist-check against <source url>, then return the Google redirect URL as the
+    fetch target. httpx follow_redirects=True resolves it to the real article.
+    """
+    import xml.etree.ElementTree as ET
+
+    site_filter = " OR ".join(
+        f"site:{d}" for d in CONFIG.source_whitelist_domains[:8]
+    )
+    queries = [query, f"{query} {site_filter}"]
+    seen: set[str] = set()
+    results: list[tuple[str, str]] = []
+
+    async with httpx.AsyncClient(headers=_HEADERS, timeout=15, follow_redirects=True) as client:
+        for q in queries:
+            try:
+                resp = await client.get(
+                    "https://news.google.com/rss/search",
+                    params={"q": q, "hl": "en-US", "gl": "US", "ceid": "US:en"},
+                )
+                resp.raise_for_status()
+                root = ET.fromstring(resp.content)
+            except Exception as exc:
+                log.debug("sources.gnews_failed", query=q[:60], error=str(exc))
+                continue
+
+            for item in root.findall(".//item")[:n_results]:
+                title_el = item.find("title")
+                title = (title_el.text or "").strip() if title_el is not None else ""
+
+                # Google redirect URL lives in <description> <a href> and also in <link>
+                desc_el = item.find("description")
+                google_url = None
+                if desc_el is not None and desc_el.text:
+                    desc_soup = BeautifulSoup(desc_el.text, "html.parser")
+                    a = desc_soup.find("a", href=True)
+                    if a:
+                        google_url = a["href"]
+
+                if not google_url or not google_url.startswith("http"):
+                    continue
+
+                # Whitelist check against publisher domain from <source url="...">, NOT
+                # the Google redirect URL (which would never pass the whitelist check).
+                source_el = item.find("source")
+                publisher_url = (source_el.get("url", "") if source_el is not None else "")
+                if not _is_whitelisted(publisher_url):
+                    continue
+
+                if google_url in seen:
+                    continue
+                seen.add(google_url)
+                results.append((google_url, title))
+
+    return results
 
 
-async def _fetch_with_sem(sem: asyncio.Semaphore, url: str) -> SourceDoc | None:
+async def _fetch_with_sem(
+    sem: asyncio.Semaphore, url: str, snippet: str = ""
+) -> SourceDoc | None:
     async with sem:
-        return await _fetch_url(url)
+        return await _fetch_url(url, snippet)
 
 
-async def _fetch_url(url: str) -> SourceDoc | None:
+async def _fetch_url(url: str, snippet: str = "") -> SourceDoc | None:
     url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
 
     # Cache hit
@@ -138,27 +199,40 @@ async def _fetch_url(url: str) -> SourceDoc | None:
 
     _domain_last_fetch[domain] = time.time()
 
+    content = ""
+    final_url = url  # updated to real article URL after a clean redirect
     try:
         async with httpx.AsyncClient(
             headers=_HEADERS,
+            cookies=_GOOGLE_CONSENT_COOKIES,
             timeout=FETCH_TIMEOUT_S,
             follow_redirects=True,
         ) as client:
             resp = await client.get(url)
             resp.raise_for_status()
-            content = _extract_text(resp.text)
+            landing_domain = _get_domain(str(resp.url))
+            if landing_domain not in _GOOGLE_GATE_DOMAINS:
+                # Successfully reached the real article
+                final_url = str(resp.url)
+                content = _extract_text(resp.text)
+            else:
+                log.debug("sources.google_gate", url=url[:80], landing=landing_domain)
     except Exception as exc:
         log.debug("sources.fetch_failed", url=url[:80], error=str(exc))
-        return None
 
     if not content.strip():
-        return None
+        if snippet.strip():
+            content = f"[SNIPPET — full article unavailable] {snippet.strip()}"
+            log.debug("sources.snippet_fallback", url=url[:80])
+        else:
+            return None
 
+    final_domain = _get_domain(final_url)
     doc = SourceDoc(
-        url=url,
+        url=final_url,
         fetched_at=datetime.utcnow(),
         content=content[:MAX_CONTENT_CHARS],
-        source_class=_classify_domain(domain),
+        source_class=_classify_domain(final_domain),
     )
     _cache[url_hash] = (time.time(), doc)
     return doc
@@ -222,7 +296,7 @@ _NEWS_DOMAINS = {"apnews.com", "reuters.com", "bloomberg.com", "ft.com",
                  "wsj.com", "nytimes.com", "washingtonpost.com",
                  "bbc.com", "bbc.co.uk", "theguardian.com",
                  "economist.com", "axios.com", "politico.com",
-                 "thehill.com", "rollcall.com",
+                 "thehill.com", "rollcall.com", "npr.org",
                  "coindesk.com", "cointelegraph.com", "theblock.co"}
 
 

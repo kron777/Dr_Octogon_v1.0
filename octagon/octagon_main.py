@@ -23,6 +23,7 @@ import octagon.octagon_scanner as scanner
 import octagon.octagon_triage as triage
 import octagon.octagon_research as research
 import octagon.octagon_resolution_watcher as watcher
+import octagon.octagon_executor as executor
 
 
 def setup_logging(log_path: str) -> None:
@@ -53,7 +54,7 @@ def setup_logging(log_path: str) -> None:
             structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,
             structlog.processors.UnicodeDecoder(),
-            structlog.stdlib.render_to_log_kwargs,
+            structlog.processors.JSONRenderer(),
         ],
         context_class=dict,
         logger_factory=structlog.stdlib.LoggerFactory(),
@@ -82,7 +83,10 @@ async def run_cycle(ledger: OctagonLedger) -> None:
 
     log.info("cycle.candidates", n=len(candidates))
 
-    for market in candidates:
+    for i, market in enumerate(candidates):
+        if i > 0 and CONFIG.research_spacing_seconds > 0:
+            await asyncio.sleep(CONFIG.research_spacing_seconds)
+        prediction = None
         try:
             prediction = await research.evaluate(market)
             ledger.log_prediction(prediction)
@@ -92,6 +96,16 @@ async def run_cycle(ledger: OctagonLedger) -> None:
                 market_id=market.market_id,
                 error=str(exc),
             )
+        if prediction is not None:
+            try:
+                await executor.maybe_execute(prediction, market, ledger)
+            except Exception as exc:
+                log.error(
+                    "cycle.executor_failed",
+                    market_id=market.market_id,
+                    error=str(exc),
+                    exc_info=True,
+                )
 
     log.info("cycle.done")
 

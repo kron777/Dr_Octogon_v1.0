@@ -31,25 +31,33 @@ class SourceDoc:
 
 
 @dataclass
+class Adjustment:
+    direction: Literal["up", "down"]
+    magnitude_pp: float   # magnitude in percentage points (5 = 5pp = +0.05 probability)
+    source_url: str
+    rationale: str
+
+
+@dataclass
 class Prediction:
     prediction_id: str
     market_id: str
-    p_yes: float               # calibration-adjusted estimate
-    p_yes_raw: float           # before calibration adjustment
-    confidence: float          # 0.0–1.0
-    edge: float                # p_yes - market_price_at_prediction
-    reasoning: str             # full trace (also written to disk)
-    evidence_refs: list[str]   # source URLs cited
+    p_yes: float                     # calibration-adjusted estimate
+    p_yes_raw: float                 # before calibration adjustment
+    base_rate: float
+    base_rate_reference_class: str
+    adjustments: list[Adjustment]
+    confidence: float                # 0.0–1.0
+    edge: float                      # p_yes - market_price_at_prediction
+    reasoning_trace_path: str        # path to JSON trace file on disk
+    evidence_refs: list[str]         # source URLs fetched
     market_price_at_prediction: float
-    resolution_clarity: float  # 0.0–1.0, collapses confidence on ambiguity
-    unciteable: bool           # True if any claim lacked a citable source
+    resolution_clarity: float        # 0.0–1.0
+    edge_cases: list[str]
+    unciteable: bool
     predicted_at: datetime
     ttl_seconds: int
-    base_rate: float
-    base_rate_ref_class: str
-    base_rate_source: str
-    adjustments: list[dict]         # [{direction, magnitude, source, reasoning}]
-    edge_cases_considered: list[dict]  # [{description, severity}]
+    model_used: str = ""
 
     @staticmethod
     def new_id() -> str:

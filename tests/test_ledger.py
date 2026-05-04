@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from octagon.octagon_models import MarketSnapshot, Prediction, Resolution, SourceDoc
+from octagon.octagon_models import Adjustment, MarketSnapshot, Prediction, Resolution, SourceDoc
 from octagon.octagon_ledger import OctagonLedger
 
 
@@ -58,7 +58,7 @@ def _make_prediction(market_id: str = "mkt001") -> Prediction:
         p_yes_raw=0.70,
         confidence=0.75,
         edge=0.07,
-        reasoning="Base rate: Fed rate-hike cycles end abruptly 30% of the time.",
+        reasoning_trace_path="/tmp/trace_placeholder.json",
         evidence_refs=["https://reuters.com/article/fed-rates"],
         market_price_at_prediction=0.65,
         resolution_clarity=0.85,
@@ -66,10 +66,16 @@ def _make_prediction(market_id: str = "mkt001") -> Prediction:
         predicted_at=datetime.utcnow(),
         ttl_seconds=3600,
         base_rate=0.65,
-        base_rate_ref_class="Fed meetings with 2+ preceding hikes and stable inflation",
-        base_rate_source="Federal Reserve meeting history 2000–2024",
-        adjustments=[{"direction": "UP", "magnitude": 0.07, "source": "reuters.com 2026-05-01", "reasoning": "Inflation above target"}],
-        edge_cases_considered=[{"description": "Meeting cancelled", "severity": "LOW"}],
+        base_rate_reference_class="Fed meetings with 2+ preceding hikes and stable inflation",
+        adjustments=[
+            Adjustment(
+                direction="up",
+                magnitude_pp=7.0,
+                source_url="https://reuters.com/article/fed-rates",
+                rationale="Inflation above target",
+            )
+        ],
+        edge_cases=["Meeting cancelled"],
     )
 
 
@@ -96,18 +102,41 @@ def test_log_and_retrieve_prediction(tmp_ledger):
     assert stats["unciteable"] == 0
 
 
-def test_trace_file_created(tmp_ledger, tmp_path):
+def test_adjustments_stored(tmp_ledger):
     m = _make_market()
     tmp_ledger.log_market_snapshot(m)
 
     pred = _make_prediction()
     tmp_ledger.log_prediction(pred)
 
-    trace_path = tmp_ledger.trace_dir / f"{pred.prediction_id}.json"
-    assert trace_path.exists()
-    data = json.loads(trace_path.read_text())
-    assert data["prediction_id"] == pred.prediction_id
-    assert "reasoning" in data
+    import sqlite3
+    con = sqlite3.connect(tmp_ledger.db_path)
+    count = con.execute("SELECT COUNT(*) FROM adjustments").fetchone()[0]
+    row = con.execute("SELECT direction, magnitude_pp, source_url FROM adjustments").fetchone()
+    con.close()
+
+    assert count == 1
+    assert row[0] == "up"
+    assert abs(row[1] - 7.0) < 0.001
+    assert "reuters" in row[2]
+
+
+def test_trace_path_stored(tmp_ledger):
+    m = _make_market()
+    tmp_ledger.log_market_snapshot(m)
+
+    pred = _make_prediction()
+    tmp_ledger.log_prediction(pred)
+
+    import sqlite3
+    con = sqlite3.connect(tmp_ledger.db_path)
+    path = con.execute(
+        "SELECT reasoning_trace_path FROM predictions WHERE prediction_id = ?",
+        (pred.prediction_id,),
+    ).fetchone()[0]
+    con.close()
+
+    assert path == pred.reasoning_trace_path
 
 
 def test_recent_predictions_returns_correct_market(tmp_ledger):
@@ -122,7 +151,7 @@ def test_recent_predictions_returns_correct_market(tmp_ledger):
     assert abs(recent["mkt001"].p_yes - 0.72) < 0.001
 
 
-def test_evidence_refs_stored(tmp_ledger):
+def test_evidence_refs_stored_from_source_docs(tmp_ledger):
     m = _make_market()
     tmp_ledger.log_market_snapshot(m)
 
@@ -134,6 +163,21 @@ def test_evidence_refs_stored(tmp_ledger):
         source_class="primary_news",
     )
     tmp_ledger.log_prediction(pred, source_docs=[doc])
+
+    import sqlite3
+    con = sqlite3.connect(tmp_ledger.db_path)
+    count = con.execute("SELECT COUNT(*) FROM evidence_refs").fetchone()[0]
+    con.close()
+    assert count == 1
+
+
+def test_evidence_refs_stored_from_prediction_urls(tmp_ledger):
+    """When no source_docs passed, evidence_refs is populated from prediction.evidence_refs."""
+    m = _make_market()
+    tmp_ledger.log_market_snapshot(m)
+
+    pred = _make_prediction()
+    tmp_ledger.log_prediction(pred)  # no source_docs
 
     import sqlite3
     con = sqlite3.connect(tmp_ledger.db_path)

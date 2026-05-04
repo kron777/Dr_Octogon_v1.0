@@ -1,0 +1,114 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 410" width="400" height="410">
+
+  <!--
+    Dr. Octogon — icon + wordmark
+    Original character: brown hair, green hex glasses, octagonal harness-collar
+    Z-order: body → back-hair → side-hair → neck → head → front-hair
+             → brows → pupils → nose → mouth → glasses → collar
+             → octagon frame → wordmark
+  -->
+
+  <!-- ── BODY / SUIT ── -->
+  <path d="M 140,322 L 149,258 C 156,222 176,210 200,208
+           C 224,210 244,222 251,258 L 260,322 Z"
+        fill="#16291E"/>
+
+  <!-- ── HAIR (back layer) ── -->
+  <!-- Back-of-head mass -->
+  <ellipse cx="200" cy="130" rx="54" ry="32" fill="#7A3B18"/>
+  <!-- Left side hair -->
+  <path d="M 149,150 Q 144,175 148,200 L 157,200 Q 154,176 158,152 Z"
+        fill="#7A3B18"/>
+  <!-- Right side hair -->
+  <path d="M 251,150 Q 256,175 252,200 L 243,200 Q 246,176 242,152 Z"
+        fill="#7A3B18"/>
+
+  <!-- ── NECK ── -->
+  <rect x="192" y="199" width="16" height="18" rx="2" fill="#F5C08A"/>
+
+  <!-- ── HEAD ── -->
+  <circle cx="200" cy="148" r="52" fill="#F5C08A"/>
+
+  <!-- ── HAIR (front layer — covers top of head circle) ── -->
+  <path d="M 150,151 Q 157,98 200,100 Q 243,98 250,151
+           Q 230,126 200,124 Q 170,126 150,151 Z"
+        fill="#7A3B18"/>
+
+  <!-- ── EYEBROWS ── -->
+  <path d="M 171,138 Q 181,133 193,136"
+        stroke="#5A2C10" stroke-width="2.8" fill="none" stroke-linecap="round"/>
+  <path d="M 207,136 Q 219,133 229,138"
+        stroke="#5A2C10" stroke-width="2.8" fill="none" stroke-linecap="round"/>
+
+  <!-- ── PUPILS (drawn before glasses so frames read as overlay) ── -->
+  <circle cx="183" cy="152" r="4.5" fill="#180A02"/>
+  <circle cx="217" cy="152" r="4.5" fill="#180A02"/>
+  <!-- Catchlights -->
+  <circle cx="181.5" cy="150.5" r="1.2" fill="rgba(255,255,255,0.80)"/>
+  <circle cx="215.5" cy="150.5" r="1.2" fill="rgba(255,255,255,0.80)"/>
+
+  <!-- ── NOSE ── -->
+  <path d="M 200,165 Q 203,172 200,175"
+        stroke="#D4956A" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+
+  <!-- ── MOUTH ── -->
+  <path d="M 191,183 Q 200,188 209,183"
+        stroke="#C07040" stroke-width="2.0" fill="none" stroke-linecap="round"/>
+
+  <!-- ── HEXAGONAL GLASSES ──
+       Flat-top regular hexagon, circumradius r=13.
+       r·(√3/2) ≈ 11.26  →  half-height = 11.3
+       Left lens centre  (183, 152)
+       Right lens centre (217, 152)
+       Inner vertices at x=196 / x=204 → 8 px bridge gap
+  -->
+  <!-- Left lens -->
+  <polygon points="196,152 189.5,163.3 176.5,163.3 170,152 176.5,140.7 189.5,140.7"
+           fill="rgba(62,207,112,0.13)" stroke="#3ECF70"
+           stroke-width="2.5" stroke-linejoin="round"/>
+  <!-- Right lens -->
+  <polygon points="230,152 223.5,163.3 210.5,163.3 204,152 210.5,140.7 223.5,140.7"
+           fill="rgba(62,207,112,0.13)" stroke="#3ECF70"
+           stroke-width="2.5" stroke-linejoin="round"/>
+  <!-- Nose bridge -->
+  <line x1="196" y1="152" x2="204" y2="152"
+        stroke="#3ECF70" stroke-width="2.0"/>
+  <!-- Left temple -->
+  <line x1="170" y1="152" x2="161" y2="149"
+        stroke="#3ECF70" stroke-width="2.0" stroke-linecap="round"/>
+  <!-- Right temple -->
+  <line x1="230" y1="152" x2="239" y2="149"
+        stroke="#3ECF70" stroke-width="2.0" stroke-linecap="round"/>
+
+  <!-- ── OCTAGONAL HARNESS-COLLAR ──
+       Regular octagon, centre (200, 220), circumradius r=20.
+       r·sin(22.5°) ≈ 7.65   r·cos(22.5°) ≈ 18.48
+       Vertices (flat-top, clockwise from top-right):
+  -->
+  <polygon
+    points="207.7,201.5  218.5,212.3  218.5,227.7  207.7,238.5
+            192.3,238.5  181.5,227.7  181.5,212.3  192.3,201.5"
+    fill="rgba(62,207,112,0.10)" stroke="#3ECF70"
+    stroke-width="2.5" stroke-linejoin="round"/>
+
+  <!-- ── GREEN OCTAGON OUTLINE ──
+       Centre (200, 185), circumradius r=152.
+       r·sin(22.5°) = 58.2   r·cos(22.5°) = 140.4
+  -->
+  <polygon
+    points="258.2,44.6   340.4,126.8  340.4,243.2  258.2,325.4
+            141.8,325.4   59.6,243.2   59.6,126.8  141.8,44.6"
+    fill="none" stroke="#3ECF70" stroke-width="3.5" stroke-linejoin="round"/>
+
+  <!-- ── WORDMARK ──
+       Bottom edge width ≈ 116 px (x 141.8 → 258.2).
+       Courier New monospace: 11 chars × 18 px × ~0.60 ≈ 118 px.
+  -->
+  <text x="200" y="360"
+        text-anchor="middle"
+        font-family="'Courier New', Courier, monospace"
+        font-size="18"
+        font-weight="500"
+        fill="white">Dr. Octogon</text>
+
+</svg>

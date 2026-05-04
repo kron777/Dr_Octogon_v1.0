@@ -7,13 +7,14 @@ and that the DB is populated after one cycle.
 """
 
 import asyncio
+import json
 import sqlite3
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from octagon.octagon_models import MarketSnapshot, Prediction
+from octagon.octagon_models import Adjustment, MarketSnapshot, Prediction
 from octagon.octagon_ledger import OctagonLedger
 from octagon.octagon_main import run_cycle
 
@@ -38,7 +39,10 @@ def _fixture_market(market_id: str = "smoke_mkt001") -> MarketSnapshot:
     )
 
 
-def _fixture_prediction(market_id: str = "smoke_mkt001") -> Prediction:
+def _fixture_prediction(
+    market_id: str = "smoke_mkt001",
+    trace_path: str = "/tmp/trace_smoke.json",
+) -> Prediction:
     return Prediction(
         prediction_id=Prediction.new_id(),
         market_id=market_id,
@@ -46,10 +50,7 @@ def _fixture_prediction(market_id: str = "smoke_mkt001") -> Prediction:
         p_yes_raw=0.67,
         confidence=0.72,
         edge=0.06,
-        reasoning=(
-            "Reference class: Fed meetings where prior meeting had a hike and inflation "
-            "remained above 2.5%. Historical YES rate ~68% (Federal Reserve 2000–2025)."
-        ),
+        reasoning_trace_path=trace_path,
         evidence_refs=["https://federalreserve.gov/newsevents"],
         market_price_at_prediction=0.62,
         resolution_clarity=0.90,
@@ -57,10 +58,9 @@ def _fixture_prediction(market_id: str = "smoke_mkt001") -> Prediction:
         predicted_at=datetime.utcnow(),
         ttl_seconds=3600,
         base_rate=0.68,
-        base_rate_ref_class="Fed meetings following prior hike with inflation >2.5%",
-        base_rate_source="Federal Reserve meeting history 2000–2025",
+        base_rate_reference_class="Fed meetings following prior hike with inflation >2.5%",
         adjustments=[],
-        edge_cases_considered=[],
+        edge_cases=[],
     )
 
 
@@ -77,7 +77,7 @@ def tmp_ledger(tmp_path):
 
 
 def test_run_cycle_once(tmp_ledger):
-    """Single cycle populates markets, predictions, and evidence_refs."""
+    """Single cycle populates markets and predictions tables."""
     market = _fixture_market()
     prediction = _fixture_prediction()
 
@@ -96,12 +96,29 @@ def test_run_cycle_once(tmp_ledger):
     assert predictions_count >= 1, "predictions table should have rows after one cycle"
 
 
-def test_trace_file_exists_after_cycle(tmp_ledger):
-    """Trace file for every prediction must exist and be valid JSON."""
+def test_trace_path_stored_after_cycle(tmp_ledger, tmp_path):
+    """reasoning_trace_path from research.evaluate is stored in DB and points to a valid file."""
     import json
 
     market = _fixture_market()
-    prediction = _fixture_prediction()
+
+    # Simulate what research.evaluate writes: a trace JSON on disk
+    traces_dir = tmp_path / "traces"
+    traces_dir.mkdir(exist_ok=True)
+
+    prediction_id = Prediction.new_id()
+    trace_file = traces_dir / f"{prediction_id}.json"
+    trace_data = {
+        "prediction_id": prediction_id,
+        "question": market.question,
+        "forecast": {"p_yes": 0.68},
+    }
+    trace_file.write_text(json.dumps(trace_data, indent=2))
+
+    prediction = _fixture_prediction(trace_path=str(trace_file))
+    # Match the prediction_id to the trace file name
+    from dataclasses import replace
+    prediction = replace(prediction, prediction_id=prediction_id)
 
     with (
         patch("octagon.octagon_scanner.scan", new=AsyncMock(return_value=[market])),
@@ -109,7 +126,15 @@ def test_trace_file_exists_after_cycle(tmp_ledger):
     ):
         asyncio.run(run_cycle(tmp_ledger))
 
-    trace_file = tmp_ledger.trace_dir / f"{prediction.prediction_id}.json"
-    assert trace_file.exists(), f"trace file missing: {trace_file}"
+    # Verify DB stored the trace path
+    con = sqlite3.connect(tmp_ledger.db_path)
+    stored_path = con.execute(
+        "SELECT reasoning_trace_path FROM predictions WHERE prediction_id = ?",
+        (prediction_id,),
+    ).fetchone()[0]
+    con.close()
+
+    assert stored_path == str(trace_file)
+    assert trace_file.exists()
     data = json.loads(trace_file.read_text())
-    assert data["prediction_id"] == prediction.prediction_id
+    assert data["prediction_id"] == prediction_id

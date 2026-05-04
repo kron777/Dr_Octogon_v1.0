@@ -1,9 +1,43 @@
+import json
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load .env from repo root (one level above this file's package directory)
+load_dotenv(Path(__file__).parent.parent / ".env")
+
+FREQ_LEVER_PATH = Path.home() / "Desktop" / "octagon" / "freq_lever.json"
 
 
 def _env_list(key: str, default: str) -> list[str]:
     return [s.strip() for s in os.getenv(key, default).split(",") if s.strip()]
+
+
+@dataclass(frozen=True)
+class Tier:
+    name: str
+    min_bankroll: float
+    max_stake_usd: float
+    min_edge_to_trade: float
+    max_edge_to_trade: float  # reject implausibly large edges (forecaster overconfidence)
+    daily_loss_cap_usd: float
+    kelly_fraction: float
+
+
+TIERS: list[Tier] = [
+    Tier("P01_Hibernate",    0.0,    0.25,  0.20,  0.30,   1.00,  0.20),
+    Tier("P02_Cautious",     0.0,    0.50,  0.15,  0.25,   2.00,  0.25),
+    Tier("P03_Default",     10.0,    0.50,  0.10,  0.20,   2.00,  0.25),
+    Tier("P04_Active",      25.0,    1.00,  0.07,  0.18,   5.00,  0.30),
+    Tier("P05_Engaged",    100.0,    2.00,  0.05,  0.15,  10.00,  0.32),
+    Tier("P06_Aggressive", 250.0,    5.00,  0.04,  0.13,  25.00,  0.35),
+    Tier("P07_Hot",        500.0,   10.00,  0.03,  0.12,  50.00,  0.38),
+    Tier("P08_Burning",   1000.0,   25.00,  0.025, 0.10, 125.00,  0.40),
+    Tier("P09_Furnace",   2500.0,   50.00,  0.02,  0.10, 250.00,  0.42),
+    Tier("P10_Nuclear",   5000.0,  100.00,  0.015, 0.08, 500.00,  0.45),
+]
 
 
 @dataclass
@@ -17,6 +51,7 @@ class OctagonConfig:
     repredict_threshold: float = float(os.getenv("REPREDICT_THRESHOLD", "0.03"))
     ttl_seconds: int = int(os.getenv("TTL_SECONDS", "3600"))
     max_markets_per_scan: int = int(os.getenv("MAX_MARKETS_PER_SCAN", "500"))
+    research_spacing_seconds: int = int(os.getenv("RESEARCH_SPACING_SECONDS", "8"))
 
     allowed_categories: list[str] = field(
         default_factory=lambda: _env_list("ALLOWED_CATEGORIES", "Politics,Macro,Crypto,Economics,Finance")
@@ -32,9 +67,32 @@ class OctagonConfig:
         os.getenv("LOG_PATH", "~/Desktop/octagon/logs/octagon.log")
     )
 
+    # ── Executor (legacy flat fields — superseded by tier system) ─────────────
+    live_trading_enabled: bool = os.getenv("LIVE_TRADING_ENABLED", "false").lower() == "true"
+    max_stake_usd: float = float(os.getenv("MAX_STAKE_USD", "0.50"))
+    daily_loss_cap_usd: float = float(os.getenv("DAILY_LOSS_CAP_USD", "2.00"))
+    min_edge_to_trade: float = float(os.getenv("MIN_EDGE_TO_TRADE", "0.10"))
+    kelly_fraction: float = float(os.getenv("KELLY_FRACTION", "0.25"))
+    starting_bankroll_usd: float = float(os.getenv("STARTING_BANKROLL_USD", "10.00"))
+
     anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
-    research_model: str = os.getenv("RESEARCH_MODEL", "claude-sonnet-4-6")
-    criteria_model: str = os.getenv("CRITERIA_MODEL", "claude-haiku-4-5-20251001")
+
+    criteria_provider: str = os.getenv("CRITERIA_PROVIDER", "cerebras")
+    criteria_model: str = os.getenv("CRITERIA_MODEL", "llama3.1-8b")
+    # Swap-back: set CRITERIA_PROVIDER=anthropic and CRITERIA_MODEL to the value below
+    # haiku_model = "claude-haiku-4-5-20251001"
+    haiku_model: str = os.getenv("HAIKU_MODEL", "claude-haiku-4-5-20251001")
+
+    forecaster_provider: str = os.getenv("FORECASTER_PROVIDER", "cerebras")
+    # Only qwen-3-235b-a22b-instruct-2507 and llama3.1-8b are accessible on this free-tier key
+    # gpt-oss-120b and zai-glm-4.7 return 404 despite appearing in models.list()
+    forecaster_model: str = os.getenv("FORECASTER_MODEL", "qwen-3-235b-a22b-instruct-2507")
+    cerebras_api_key: str = os.getenv("CEREBRAS_API_KEY", "")
+    cerebras_base_url: str = os.getenv("CEREBRAS_BASE_URL", "https://api.cerebras.ai/v1")
+
+    # Swap-back: set FORECASTER_PROVIDER=anthropic and FORECASTER_MODEL to the value below
+    # opus_model = "claude-opus-4-7"
+    opus_model: str = os.getenv("OPUS_MODEL", "claude-opus-4-7")
 
     # Primary news, official government, financial data sources
     source_whitelist_domains: list[str] = field(default_factory=lambda: [
@@ -70,6 +128,8 @@ class OctagonConfig:
         "politico.com",
         "thehill.com",
         "rollcall.com",
+        "npr.org",
+        "state.gov",
     ])
 
     # Prediction-market commentary, aggregators, insider accounts — hard-banned.
@@ -87,5 +147,31 @@ class OctagonConfig:
         "smarkets.com",
     ])
 
+    def active_tier(self, bankroll: float) -> Tier:
+        """Highest tier whose min_bankroll <= bankroll."""
+        result = TIERS[0]
+        for t in TIERS:
+            if bankroll >= t.min_bankroll:
+                result = t
+        return result
+
 
 CONFIG = OctagonConfig()
+
+
+def get_effective_tier(bankroll: float) -> tuple[Tier, str]:
+    """
+    Returns (tier, mode). Reads freq_lever.json; falls back to auto on any error.
+    mode is 'auto' or 'manual'. manual_position is 1-indexed.
+    """
+    try:
+        if FREQ_LEVER_PATH.exists():
+            data = json.loads(FREQ_LEVER_PATH.read_text())
+            mode = data.get("mode", "auto")
+            if mode == "manual":
+                pos = int(data.get("manual_position", 3))
+                pos = max(1, min(len(TIERS), pos))
+                return TIERS[pos - 1], "manual"
+    except Exception:
+        pass
+    return CONFIG.active_tier(bankroll), "auto"

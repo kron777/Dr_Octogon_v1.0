@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-label="Dr. Octogon">
+  <title>Dr. Octogon</title>
+  <desc>Octogon project mark: green octagonal frame containing a stylized character with short brown hair, hexagonal green-framed spectacles, and a small octagonal harness with a green status LED at the base.</desc>
+
+  <polygon points="100,10 164,36 190,100 164,164 100,190 36,164 10,100 36,36"
+           fill="none" stroke="#2EA043" stroke-width="7" stroke-linejoin="round"/>
+
+  <ellipse cx="100" cy="84" rx="32" ry="38" fill="#F2C9A0"/>
+
+  <path d="M68,86 C66,48 78,40 100,40 C122,40 134,48 132,86 L125,76 C120,66 112,62 100,62 C88,62 80,66 75,76 Z"
+        fill="#5C3A21"/>
+
+  <line x1="78" y1="80" x2="90" y2="82" stroke="#3B2614" stroke-width="2.4" stroke-linecap="round"/>
+  <line x1="110" y1="82" x2="122" y2="80" stroke="#3B2614" stroke-width="2.4" stroke-linecap="round"/>
+
+  <polygon points="76,86 90,86 96,94 90,102 76,102 70,94"
+           fill="#0F1419" stroke="#3FB950" stroke-width="2.4" stroke-linejoin="round"/>
+  <polygon points="110,86 124,86 130,94 124,102 110,102 104,94"
+           fill="#0F1419" stroke="#3FB950" stroke-width="2.4" stroke-linejoin="round"/>
+  <line x1="96" y1="94" x2="104" y2="94" stroke="#3FB950" stroke-width="2.4" stroke-linecap="round"/>
+
+  <path d="M92,112 Q100,117 108,112" fill="none" stroke="#3B2614" stroke-width="1.6" stroke-linecap="round"/>
+
+  <path d="M72,128 Q66,128 66,134 L66,160 Q66,168 74,168 L126,168 Q134,168 134,160 L134,134 Q134,128 128,128 Z"
+        fill="#2D3748" stroke="#484F58" stroke-width="1"/>
+
+  <polygon points="100,134 112,140 116,150 112,160 100,166 88,160 84,150 88,140"
+           fill="#0F1419" stroke="#3FB950" stroke-width="1.8" stroke-linejoin="round"/>
+  <circle cx="100" cy="150" r="4" fill="#3FB950"/>
+  <circle cx="100" cy="150" r="1.5" fill="#0F4F2E"/>
+</svg>
