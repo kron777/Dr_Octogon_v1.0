@@ -141,6 +141,7 @@ class OctagonLedger:
             "ALTER TABLE predictions ADD COLUMN model_used TEXT DEFAULT ''",
             "ALTER TABLE trades ADD COLUMN pnl_usd REAL DEFAULT NULL",
             "ALTER TABLE trades ADD COLUMN closed_at TEXT DEFAULT NULL",
+            "ALTER TABLE trades ADD COLUMN copy_source TEXT DEFAULT NULL",
         ]:
             try:
                 con.execute(stmt)
@@ -388,6 +389,82 @@ class OctagonLedger:
             paper=paper,
         )
 
+    def log_copy_trade(self, trade: "Trade", copy_source: str, paper: bool = True) -> None:
+        """Like log_trade but sets copy_source column for P&L attribution."""
+        con = self._connect()
+        con.execute(
+            """
+            INSERT INTO trades
+                (trade_id, prediction_id, market_id, side,
+                 entry_price, size_usd, entered_at, paper, status, copy_source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)
+            """,
+            (
+                trade.trade_id,
+                trade.prediction_id,
+                trade.market_id,
+                trade.side,
+                trade.entry_price,
+                trade.size_usd,
+                trade.entered_at.isoformat(),
+                int(paper),
+                copy_source,
+            ),
+        )
+        con.commit()
+        con.close()
+        log.info(
+            "ledger.copy_trade_logged",
+            trade_id=trade.trade_id,
+            market_id=trade.market_id,
+            side=trade.side,
+            size_usd=round(trade.size_usd, 4),
+            entry_price=round(trade.entry_price, 4),
+            copy_source=copy_source,
+            paper=paper,
+        )
+
+    def copy_trade_daily_loss_usd(self) -> float:
+        """Sum of copy-trade stakes entered today (for daily loss cap enforcement)."""
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        con = self._connect()
+        cur = con.cursor()
+        cur.execute(
+            """
+            SELECT COALESCE(SUM(size_usd), 0.0)
+            FROM trades
+            WHERE paper = 1
+              AND copy_source IS NOT NULL
+              AND entered_at >= ?
+            """,
+            (today,),
+        )
+        result = cur.fetchone()[0]
+        con.close()
+        return float(result)
+
+    def copy_trades_for_hud(self, limit: int = 5) -> list[dict]:
+        """Return last N copy trades for the HUD ARM 10 panel."""
+        con = self._connect()
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        cur.execute(
+            """
+            SELECT t.trade_id, t.market_id, t.side, t.size_usd, t.entry_price,
+                   t.entered_at, t.status, t.pnl_usd, t.copy_source,
+                   m.question
+            FROM trades t
+            LEFT JOIN markets m ON m.market_id = t.market_id
+            WHERE t.copy_source IS NOT NULL
+            ORDER BY t.entered_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        con.close()
+        return rows
+
     def today_paper_loss_usd(self) -> float:
         """Sum of paper trade stakes entered today (worst-case daily exposure)."""
         today = datetime.utcnow().strftime("%Y-%m-%d")
@@ -507,6 +584,36 @@ class OctagonLedger:
         rows = cur.fetchall()
         con.close()
         return [row[0] for row in rows]
+
+    def invalid_resolution_market_ids(self) -> list[str]:
+        """Market IDs whose stored resolution is INVALID — eligible for re-check."""
+        con = self._connect()
+        cur = con.cursor()
+        cur.execute(
+            "SELECT market_id FROM resolutions WHERE outcome = 'INVALID'"
+        )
+        rows = cur.fetchall()
+        con.close()
+        return [row[0] for row in rows]
+
+    def price_change_24h(self, market_id: str) -> float:
+        """Absolute yes_price change over the last 24h from market_snapshots. 0.0 if no history."""
+        cutoff = (datetime.utcnow() - timedelta(hours=24)).isoformat()
+        con = self._connect()
+        cur = con.cursor()
+        cur.execute(
+            """
+            SELECT MIN(yes_price), MAX(yes_price)
+            FROM market_snapshots
+            WHERE market_id = ? AND snapshot_at >= ?
+            """,
+            (market_id, cutoff),
+        )
+        row = cur.fetchone()
+        con.close()
+        if row and row[0] is not None and row[1] is not None:
+            return abs(row[1] - row[0])
+        return 0.0
 
     def summary(self) -> dict:
         """Aggregate stats for the report CLI."""

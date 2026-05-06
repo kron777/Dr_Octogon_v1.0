@@ -9,6 +9,7 @@ Phase 0: pure data collection. Triggers nothing downstream.
 """
 
 import asyncio
+import json as _json
 from datetime import datetime
 
 import httpx
@@ -26,15 +27,21 @@ RESOLUTION_CONCURRENCY = 5
 
 async def run(ledger: OctagonLedger) -> None:
     pending = ledger.unresolved_markets_past_resolution_time()
-    if not pending:
+    invalid_pending = ledger.invalid_resolution_market_ids()
+
+    # De-duplicate: invalid_pending might overlap with pending if ledger state is inconsistent
+    recheck = [mid for mid in invalid_pending if mid not in set(pending)]
+
+    total = len(pending) + len(recheck)
+    if not total:
         log.info("watcher.no_pending")
         return
 
-    log.info("watcher.start", pending=len(pending))
+    log.info("watcher.start", pending=len(pending), recheck_invalid=len(recheck))
     sem = asyncio.Semaphore(RESOLUTION_CONCURRENCY)
-    tasks = [_check_market(sem, ledger, mid) for mid in pending]
+    tasks = [_check_market(sem, ledger, mid) for mid in pending + recheck]
     await asyncio.gather(*tasks, return_exceptions=True)
-    log.info("watcher.done", checked=len(pending))
+    log.info("watcher.done", checked=total)
 
 
 async def _check_market(
@@ -79,8 +86,21 @@ def _extract_resolution(market_id: str, data: dict) -> Resolution | None:
     if not closed:
         return None
 
+    # Gamma API returns outcomePrices and payout as JSON-encoded strings, not lists.
+    # Mirror the scanner's parsing (octagon_scanner.py) to avoid iterating characters.
     outcome_prices = data.get("outcomePrices") or []
+    if isinstance(outcome_prices, str):
+        try:
+            outcome_prices = _json.loads(outcome_prices)
+        except (_json.JSONDecodeError, ValueError):
+            outcome_prices = []
+
     payout = data.get("payout") or []
+    if isinstance(payout, str):
+        try:
+            payout = _json.loads(payout)
+        except (_json.JSONDecodeError, ValueError):
+            payout = []
 
     # Prefer explicit payout array; fall back to outcomePrices
     vals = payout if payout else outcome_prices

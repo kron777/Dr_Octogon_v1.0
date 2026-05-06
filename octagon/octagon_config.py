@@ -67,6 +67,46 @@ class OctagonConfig:
         os.getenv("LOG_PATH", "~/Desktop/octagon/logs/octagon.log")
     )
 
+    # ── Hype-fade lane ────────────────────────────────────────────────────────
+    hype_fade_enabled: bool = os.getenv("HYPE_FADE_ENABLED", "false").lower() == "true"
+    hype_fade_min_score: float = float(os.getenv("HYPE_FADE_MIN_SCORE", "0.7"))
+    hype_fade_min_edge: float = float(os.getenv("HYPE_FADE_MIN_EDGE", "0.15"))
+    hype_fade_daily_cap: int = int(os.getenv("HYPE_FADE_DAILY_CAP", "5"))
+    # Velocity gate: skip sentiment LLM call when news_velocity < this threshold.
+    # At velocity < 0.5, hype_score is capped at 0.4*0.5 + 0.4*1.0 + 0.2*1.0 = 0.8 max, but
+    # realistically stays below 0.7 without both velocity and sentiment firing.
+    hype_velocity_gate: float = float(os.getenv("HYPE_VELOCITY_GATE", "0.5"))
+    # Cache TTL in hours (was hardcoded to 1h; longer TTL reduces LLM costs for slow-moving markets).
+    hype_cache_ttl_hours: float = float(os.getenv("HYPE_CACHE_TTL_HOURS", "4"))
+    # Sentiment model for hype detector. Spec wants gpt-oss-120b but it returns 404 on
+    # the current free-tier Cerebras key. Options: llama3.1-8b (fast/weak),
+    # claude-haiku-4-5-20251001 (strong, set SENTIMENT_PROVIDER=anthropic),
+    # or qwen-3-235b-a22b-instruct-2507 (available until ~2026-05-27 deprecation).
+    # SENTIMENT_PROVIDER=local uses LOCAL_LLAMA_URL (OpenAI-compatible, no key required).
+    sentiment_model: str = os.getenv("SENTIMENT_MODEL", "llama3.1-8b")
+    sentiment_provider: str = os.getenv("SENTIMENT_PROVIDER", "cerebras")
+    # Fallback provider when primary errors or 429s. "local" uses LOCAL_LLAMA_URL.
+    sentiment_fallback_provider: str = os.getenv("SENTIMENT_FALLBACK_PROVIDER", "local")
+    local_llama_url: str = os.getenv("LOCAL_LLAMA_URL", "http://localhost:8080/v1")
+    hype_score_cache_path: str = os.path.expanduser(
+        os.getenv("HYPE_SCORE_CACHE_PATH", "~/Desktop/octagon/hype_scores.json")
+    )
+
+    # ── Copy-trading lane ─────────────────────────────────────────────────────
+    copy_trade_enabled: bool = os.getenv("COPY_TRADE_ENABLED", "false").lower() == "true"
+    copy_trade_ratio: float = float(os.getenv("COPY_TRADE_RATIO", "0.1"))
+    copy_trade_max_wallets: int = int(os.getenv("COPY_TRADE_MAX_WALLETS", "5"))
+    copy_trade_min_win_rate: float = float(os.getenv("COPY_TRADE_MIN_WIN_RATE", "0.70"))
+    copy_trade_min_resolved: int = int(os.getenv("COPY_TRADE_MIN_RESOLVED", "100"))
+    copy_trade_min_median_usd: float = float(os.getenv("COPY_TRADE_MIN_MEDIAN_USD", "10.0"))
+    copy_trade_daily_loss_cap_pct: float = float(os.getenv("COPY_TRADE_DAILY_LOSS_CAP_PCT", "0.05"))
+    copy_trade_drawdown_stop_pct: float = float(os.getenv("COPY_TRADE_DRAWDOWN_STOP_PCT", "0.15"))
+    copy_trade_poll_interval_s: float = float(os.getenv("COPY_TRADE_POLL_INTERVAL_S", "5.0"))
+    copy_trade_wallet_refresh_s: int = int(os.getenv("COPY_TRADE_WALLET_REFRESH_S", "1800"))
+    copy_trade_hud_path: str = os.path.expanduser(
+        os.getenv("COPY_TRADE_HUD_PATH", "~/Desktop/octagon/copy_trade_state.json")
+    )
+
     # ── Executor (legacy flat fields — superseded by tier system) ─────────────
     live_trading_enabled: bool = os.getenv("LIVE_TRADING_ENABLED", "false").lower() == "true"
     max_stake_usd: float = float(os.getenv("MAX_STAKE_USD", "0.50"))

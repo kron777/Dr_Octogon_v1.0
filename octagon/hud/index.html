@@ -308,6 +308,38 @@
     <div class="arm-list" id="arm8-list"><div class="empty">no resolutions yet</div></div>
   </div>
 
+  <div class="panel">
+    <span class="screw tl"></span><span class="screw tr"></span><span class="screw bl"></span><span class="screw br"></span>
+    <div class="arm-header">
+      <span class="lbl"><span class="led" id="led-arm9"></span>arm 9 · hype fade</span>
+      <span class="lbl" id="arm9-status">disabled</span>
+    </div>
+    <div class="arm-stats" style="display:flex; gap:12px; padding: 4px 0 6px;">
+      <div><span class="lbl">placed</span> <span class="num gn" id="arm9-placed">0</span></div>
+      <div><span class="lbl">rejected</span> <span class="num vdim" id="arm9-rejected">0</span></div>
+      <div><span class="lbl">cap</span> <span class="num" id="arm9-cap">5</span></div>
+      <div><span class="lbl">min score</span> <span class="num" id="arm9-min-score">0.70</span></div>
+    </div>
+    <div class="arm-list" id="arm9-list"><div class="empty">hype-fade disabled</div></div>
+  </div>
+
+  <!-- ARM 10: copy trader -->
+  <div class="panel">
+    <span class="screw tl"></span><span class="screw tr"></span><span class="screw bl"></span><span class="screw br"></span>
+    <div class="arm-header">
+      <span class="lbl"><span class="led" id="led-arm10"></span>arm 10 · copy trader</span>
+      <span class="lbl" id="arm10-status">disabled</span>
+    </div>
+    <div class="arm-stats" style="display:flex; gap:12px; padding: 4px 0 6px;">
+      <div><span class="lbl">wallets</span> <span class="num gn" id="arm10-wallets">0</span></div>
+      <div><span class="lbl">copies today</span> <span class="num" id="arm10-copies">0</span></div>
+      <div><span class="lbl">exposure</span> <span class="num rd" id="arm10-exposure">$0.00</span></div>
+    </div>
+    <div class="arm-list" id="arm10-wallet-list"><div class="empty">no wallets selected</div></div>
+    <div style="margin-top:6px; font-size:10px; color:var(--dim)">last copy events</div>
+    <div class="arm-list" id="arm10-event-list"><div class="empty">no events</div></div>
+  </div>
+
 </div>
 
 <!-- ── Freq Lever ── -->
@@ -562,6 +594,77 @@
         const pred = r.p_yes !== null ? `p ${r.p_yes.toFixed(2)}` : "—";
         div.innerHTML = `<span class="${cls}" style="width: 12px; flex-shrink: 0; font-weight: 500;">${mark}</span><span class="q">${trunc(r.question, 22)}</span><span class="vdim" style="font-size: 10px;">${(r.outcome || '').toLowerCase()} · ${pred}</span>`;
         a8.appendChild(div);
+      });
+    }
+
+    // Arm 9 — hype fade
+    const hf = state.arm9_hype_fade || {};
+    const hfEnabled = !!hf.enabled;
+    $("arm9-status").textContent  = hfEnabled ? "active" : "disabled";
+    $("led-arm9").className       = "led" + (hfEnabled ? " pulse" : "");
+    $("arm9-placed").textContent  = hf.placed_today ?? 0;
+    $("arm9-rejected").textContent= hf.rejected_today ?? 0;
+    $("arm9-cap").textContent     = hf.daily_cap ?? 5;
+    $("arm9-min-score").textContent = hf.min_score !== undefined ? hf.min_score.toFixed(2) : "0.70";
+    const a9 = $("arm9-list");
+    a9.innerHTML = "";
+    const hfMarkets = hf.top_markets || [];
+    if (!hfEnabled) {
+      a9.innerHTML = '<div class="empty">set HYPE_FADE_ENABLED=true to activate</div>';
+    } else if (hfMarkets.length === 0) {
+      a9.innerHTML = '<div class="empty">no hype scores computed yet</div>';
+    } else {
+      hfMarkets.forEach(m => {
+        const div = document.createElement("div");
+        div.className = "item";
+        const scoreVal = m.hype_score !== undefined ? m.hype_score.toFixed(2) : "—";
+        const scoreCls = m.hype_score >= (hf.min_score || 0.7) ? "am" : "vdim";
+        const whale = m.whale_signal && m.whale_signal !== "none" ? ` 🐋${m.whale_signal}` : "";
+        const mid = (m.market_id || "").toString().slice(0, 10);
+        div.innerHTML = `<span class="${scoreCls}" style="width:28px; flex-shrink:0; font-weight:500;">${scoreVal}</span><span class="q">${mid}</span><span class="vdim" style="font-size:10px;">v${(m.news_velocity||0).toFixed(2)} s${(m.sentiment_intensity||0).toFixed(2)} d${(m.prob_drift_vs_evidence||0).toFixed(2)}${whale}</span>`;
+        a9.appendChild(div);
+      });
+    }
+
+    // Arm 10 — copy trader
+    const ct = state.arm10_copy_trade || {};
+    const ctEnabled = !!ct.enabled;
+    $("arm10-status").textContent = ctEnabled ? "active" : "disabled";
+    $("led-arm10").className      = "led" + (ctEnabled ? " pulse" : "");
+    const ctWallets = ct.active_wallets || [];
+    $("arm10-wallets").textContent  = ctWallets.length;
+    $("arm10-copies").textContent   = ct.copies_today ?? 0;
+    $("arm10-exposure").textContent = ct.daily_exposure !== undefined ? "$" + ct.daily_exposure.toFixed(2) : "$0.00";
+    const a10w = $("arm10-wallet-list");
+    a10w.innerHTML = "";
+    if (!ctEnabled) {
+      a10w.innerHTML = '<div class="empty">set COPY_TRADE_ENABLED=true to activate</div>';
+    } else if (ctWallets.length === 0) {
+      a10w.innerHTML = '<div class="empty">selecting wallets…</div>';
+    } else {
+      ctWallets.forEach(w => {
+        const div = document.createElement("div");
+        div.className = "item";
+        const wr = w.win_rate !== undefined ? (w.win_rate * 100).toFixed(0) + "%" : "—";
+        const pnl30 = w.pnl_30d !== undefined ? (w.pnl_30d >= 0 ? "+" : "") + w.pnl_30d.toFixed(2) : "—";
+        const pnlCls = (w.pnl_30d || 0) >= 0 ? "gn" : "rd";
+        div.innerHTML = `<span class="q" style="flex:1">${(w.user_name||"").slice(0,14)}</span><span class="vdim" style="font-size:10px; margin-right:6px">wr ${wr} t${w.trade_count||0}</span><span class="${pnlCls}" style="font-size:10px; min-width:36px; text-align:right">${pnl30}</span>`;
+        a10w.appendChild(div);
+      });
+    }
+    const a10e = $("arm10-event-list");
+    a10e.innerHTML = "";
+    const ctEvents = ct.last_events || [];
+    if (ctEvents.length === 0) {
+      a10e.innerHTML = '<div class="empty">no copy events yet</div>';
+    } else {
+      ctEvents.slice(0, 5).forEach(ev => {
+        const div = document.createElement("div");
+        div.className = "item";
+        const stCls = ev.status === "placed" ? "gn" : "vdim";
+        const sz = ev.copy_size !== undefined ? `$${ev.copy_size}` : `$${(ev.whale_size||0).toFixed(1)}✕`;
+        div.innerHTML = `<span class="${stCls}" style="width:12px;flex-shrink:0">▸</span><span class="q" style="flex:1">${(ev.title||"").slice(0,22)}</span><span class="vdim" style="font-size:10px; margin-right:4px">${ev.side||""} ${sz}</span><span class="${stCls}" style="font-size:10px">${ev.status||""}</span>`;
+        a10e.appendChild(div);
       });
     }
 

@@ -27,6 +27,8 @@ from pathlib import Path
 
 import structlog
 
+import octagon.octagon_hype_detector as hype_detector
+import octagon.octagon_copy_trader as copy_trader
 from octagon.octagon_config import CONFIG, get_effective_tier
 from octagon.octagon_ledger import OctagonLedger
 from octagon.octagon_models import MarketSnapshot, Prediction, Trade
@@ -107,6 +109,61 @@ async def maybe_execute(
         )
         return
 
+    # ── 3c. Hype-fade gate (only active when HYPE_FADE_ENABLED=true) ─────────
+    if CONFIG.hype_fade_enabled:
+        hype = await hype_detector.analyze(market, prediction, ledger)
+
+        # In hype-fade mode only NO bets on high-hype markets are allowed
+        if side != "NO":
+            log.debug(
+                "executor.hype_fade_yes_blocked",
+                market_id=market.market_id,
+                side=side,
+                hype_score=round(hype.hype_score, 3),
+            )
+            hype_detector.record_rejected(market.market_id)
+            return
+
+        if hype.hype_score < CONFIG.hype_fade_min_score:
+            log.debug(
+                "executor.hype_fade_score_too_low",
+                market_id=market.market_id,
+                hype_score=round(hype.hype_score, 3),
+                threshold=CONFIG.hype_fade_min_score,
+            )
+            hype_detector.record_rejected(market.market_id)
+            return
+
+        if hype.whale_signal in {"fresh-yes", "insider-suspect"}:
+            log.warning(
+                "executor.hype_fade_whale_block",
+                market_id=market.market_id,
+                whale_signal=hype.whale_signal,
+                hype_score=round(hype.hype_score, 3),
+            )
+            hype_detector.record_rejected(market.market_id)
+            return
+
+        if exec_edge < CONFIG.hype_fade_min_edge:
+            log.debug(
+                "executor.hype_fade_edge_too_small",
+                market_id=market.market_id,
+                exec_edge=round(exec_edge, 4),
+                threshold=CONFIG.hype_fade_min_edge,
+            )
+            hype_detector.record_rejected(market.market_id)
+            return
+
+        placed = hype_detector.placed_today()
+        if placed >= CONFIG.hype_fade_daily_cap:
+            log.info(
+                "executor.hype_fade_daily_cap",
+                market_id=market.market_id,
+                placed_today=placed,
+                cap=CONFIG.hype_fade_daily_cap,
+            )
+            return
+
     # ── 4. Kelly stake sizing ─────────────────────────────────────────────────
     raw_stake = raw_kelly * tier.kelly_fraction * bankroll
 
@@ -179,6 +236,43 @@ async def maybe_execute(
     )
     ledger.log_trade(trade, paper=True)
 
+    if CONFIG.hype_fade_enabled:
+        hype_detector.record_placed(market.market_id)
+
 
 def _effective_bankroll(ledger: OctagonLedger) -> float:
     return ledger.current_bankroll()
+
+
+async def execute_copy_signal(
+    signal: "copy_trader.CopySignal",
+    ledger: OctagonLedger,
+) -> None:
+    """
+    Entry point for copy-trade signals from run_copy_watcher().
+    Delegates to copy_trader.maybe_copy_execute() which owns all risk caps.
+    Only active when COPY_TRADE_ENABLED=true.
+    """
+    if not CONFIG.copy_trade_enabled:
+        return
+    bankroll = _effective_bankroll(ledger)
+    await copy_trader.maybe_copy_execute(signal, ledger, bankroll)
+
+
+async def run_copy_lane(ledger: OctagonLedger) -> None:
+    """
+    Long-running coroutine that owns the copy-trading signal queue.
+    Call this from octagon.main alongside the existing scan loop when
+    COPY_TRADE_ENABLED=true.
+    """
+    signal_queue: asyncio.Queue = asyncio.Queue()
+    watcher = asyncio.create_task(copy_trader.run_copy_watcher(signal_queue))
+
+    try:
+        while True:
+            signal = await signal_queue.get()
+            await execute_copy_signal(signal, ledger)
+            signal_queue.task_done()
+    except asyncio.CancelledError:
+        watcher.cancel()
+        raise

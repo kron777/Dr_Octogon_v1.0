@@ -120,6 +120,12 @@ async def _main_loop(ledger: OctagonLedger, stop_event: asyncio.Event) -> None:
             await asyncio.sleep(3600)
 
     watcher_task = asyncio.create_task(watcher_loop())
+
+    copy_task = None
+    if CONFIG.copy_trade_enabled:
+        log.info("copy_lane.starting")
+        copy_task = asyncio.create_task(executor.run_copy_lane(ledger))
+
     try:
         while not stop_event.is_set():
             try:
@@ -129,6 +135,8 @@ async def _main_loop(ledger: OctagonLedger, stop_event: asyncio.Event) -> None:
             await asyncio.sleep(CONFIG.loop_interval_seconds)
     finally:
         watcher_task.cancel()
+        if copy_task:
+            copy_task.cancel()
         _flush_wal(ledger.db_path)
 
 

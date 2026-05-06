@@ -30,6 +30,8 @@ from urllib.parse import urlparse
 import structlog
 
 from octagon.octagon_config import CONFIG, FREQ_LEVER_PATH, TIERS, get_effective_tier
+import octagon.octagon_hype_detector as hype_detector
+import octagon.octagon_copy_trader as copy_trader
 
 log = structlog.get_logger(__name__)
 
@@ -300,6 +302,8 @@ def _build_state(con: sqlite3.Connection) -> dict[str, Any]:
             for r in res_rows
         ],
         "freq_lever": freq_lever,
+        "arm9_hype_fade": hype_detector.read_hud_data(),
+        "arm10_copy_trade": _build_arm10(con),
     }
 
 
@@ -567,7 +571,28 @@ def _empty_state() -> dict[str, Any]:
             "all_positions": [],
             "override_warning": False,
         },
+        "arm9_hype_fade": {"enabled": False},
+        "arm10_copy_trade": {"enabled": False, "active_wallets": [], "last_events": []},
     }
+
+
+def _build_arm10(con: sqlite3.Connection) -> dict:
+    """Build ARM 10 copy-trade panel data."""
+    hud = copy_trader.read_hud_data()
+    # Enrich with live copy-trade P&L from DB
+    try:
+        today = __import__("datetime").datetime.utcnow().strftime("%Y-%m-%d")
+        row = con.execute(
+            "SELECT COUNT(*), COALESCE(SUM(size_usd), 0) FROM trades "
+            "WHERE copy_source IS NOT NULL AND paper=1 AND entered_at >= ?",
+            (today,),
+        ).fetchone()
+        hud["copies_today"] = int(row[0]) if row else 0
+        hud["daily_exposure"] = round(float(row[1]), 4) if row else 0.0
+    except Exception:
+        hud["copies_today"] = 0
+        hud["daily_exposure"] = 0.0
+    return hud
 
 
 # ── HTTP handler ──────────────────────────────────────────────────────────────
